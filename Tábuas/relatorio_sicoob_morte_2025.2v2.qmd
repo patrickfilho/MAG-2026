@@ -1,0 +1,2272 @@
+---
+format:
+
+    html:
+
+        embed-resources: true
+
+        toc: true
+
+        toc-title: ' '
+
+        toc-location: left
+
+        toc-depth: 2
+
+        toc-expand: true
+---
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+options(scipen=999)
+
+data.item <- read.csv("Sicoob - 2025-09-01 - Morte - v2.csv")
+
+library(tidyverse)
+library(BayesMortalityPlus)
+library(ggplot2)
+library(plotly)
+library(DT)
+library(knitr)
+library(kableExtra)
+
+prods <- unique(data.item$grupoPrecificacao) 
+
+# Desagravo
+desagravo <- function(qx_obs, Ex, qx_fit){
+  perda <- function(phi) sum(Ex * abs( log(qx_obs) - log(phi * qx_fit) ))
+  pc <- optimise(perda, lower = 0, upper = 100)$minimum
+  new_qx <- pc * qx_fit
+  pc_dez <- round(pc*100, 2)
+  return(list(qx_dez = new_qx,
+              pc_int = pc,
+              pc_dez = as.character(paste(pc_dez, "%"))))
+}
+
+
+# Teste
+teste <- function(Dx, qxfit, Ex){  
+  tab <- data.frame(Dx, Dxhat = Ex*qxfit)  
+  epsilon <- (tab$Dx*log(tab$Dx/tab$Dxhat)) - (tab$Dx - tab$Dxhat)  
+  estatistica <- 2*sum( epsilon ) 
+  
+  ## p-valor = Probabilidade de obter um valor maior ao que foi observado, sob H0  
+  ## (logo, dado q a est. de teste é uma qui-quadrada, sob H0, o p-valor e a prob dessa qui-quadrada  
+  ## ser maior q a estatistica observada)  
+  p.valor = round( ( 1 - pchisq(estatistica, df = nrow(tab)-1) ), 5 ) 
+  
+  ## poder teste
+  #w = sqrt(estatistica/sum(Dx))
+  #c = qchisq(0.95, nrow(tab)-1)
+  #poder = round( ( 1 - pchisq(c, df = nrow(tab)-1, ncp = estatistica) ), 5 ) 
+  
+  return(p.valor)
+  #return(c(p.valor, poder)) 
+}
+
+
+# EQM
+EQM <- function(qx, qxfit){  
+  round(mean((log(qx) - log(qxfit))^2),5)  
+}
+
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+```
+
+# Relatório VI demais MQC/VG cotado MQC/VG prestamista MQC
+
+## Cálculo da Taxa de Mortalidade
+
+A partir dos dados de mortalidade das coberturas de Vida Individual demais Morte Qualquer Causa (MQC), Vida em Grupo cotado Morte Qualquer Causa (VG cotado MQC) e Vida em Grupo prestamista Morte Qualquer Causa (VG prestamista MQC) consideramos $i$, a idade do segurado, e $j$, o ano de referência e definimos as seguintes quantidades:
+
+-   $E_{ij}$ : Exposição em pessoas-ano na idade $i$ e no ano $j$;
+-   $O_{ij}$ : Contagem de óbitos na idade $i$ e no ano $j$;
+
+A taxa de mortalidade por idade é computada dividindo-se a contagem de óbitos pela exposição em cada idade, ou seja
+
+$$m_i = \frac{O_i}{E_i}, $$ onde $O_i = \sum_j O_{ij}$ e $E_i = \sum_j E_{ij}$. Note que as taxas brutas por idade são calculadas utilizando todo o conjunto de anos definido para este estudo.
+
+O conjunto de anos considerado para esta análise é referente à janela temporal de 2019 até dezembro de 2024 com consulta feita em 2024/09/08.
+
+Adicionalmente, calculamos a união entre as 3 populações presentes nas coberturas de VI demais MQC/VG cotado MQC/VG prestamista MQC sob a etiqueta "MQC", indicando Morte Qualquer Causa sem segregar por produto.
+
+## Análise Exploratória
+
+A seguir, apresentaremos gráficos de exposição e óbitos para comparar os dados dos produtos VI demais MQC/VG cotado MQC/VG prestamista MQC.
+
+### Exposição e Óbitos na Janela Temporal (2019-2024)
+
+::: panel-tabset
+#### Exposição
+
+```{r}
+### VI demais MQC
+
+data.item %>% filter(ano %in% 2019:2024, idade %in% 10:100) %>%
+  filter(grupoPrecificacao == prods[4]) %>%
+  select(idade, sexo, exp, obt, obtNatural, obtAcidental) %>%
+  group_by(idade, sexo) %>%
+  summarise(exp = sum(exp), obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) -> dados.vi
+
+
+### VG cotado MQC
+data.item %>% filter(ano %in% 2019:2024, idade %in% 10:100) %>%
+  filter(grupoPrecificacao == prods[2]) %>%
+  select(idade, sexo, exp, obt, obtNatural, obtAcidental) %>%
+  group_by(idade, sexo) %>%
+  summarise(exp = sum(exp), obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) -> dados.vg.cot
+
+### VG prestamista MQC
+data.item %>% filter(ano %in% 2019:2024, idade %in% 10:100) %>%
+  filter(grupoPrecificacao == prods[3]) %>%
+  select(idade, sexo, exp, obt, obtNatural, obtAcidental) %>%
+  group_by(idade, sexo) %>%
+  summarise(exp = sum(exp), obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) -> dados.vg.pres
+
+### MQC
+data.item %>% filter(ano %in% 2019:2024, idade %in% 10:100) %>%
+  filter(grupoPrecificacao == prods[1]) %>%
+  select(idade, sexo, exp, obt, obtNatural, obtAcidental) %>%
+  group_by(idade, sexo) %>%
+  summarise(exp = sum(exp), obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) -> dados
+
+aux.cor <- c("VI demais MQC Masc." = "aquamarine",
+             "VG cotado MQC Masc." = "deepskyblue2",
+             "VG prestamista MQC Masc." = "darkslategray1",
+             "MQC Masc." = "blue3",
+             "VI demais MQC Fem." = "deeppink",
+             "VG cotado MQC Fem." = "darksalmon",
+             "VG prestamista MQC Fem." = "darkgoldenrod1",
+             "MQC Fem." = "red3")
+
+
+ggplot() +
+  geom_line(data = dados.vi %>% filter(sexo == "M"),
+            aes(x = idade, y = exp, color = "VI demais MQC Masc.")) +
+  geom_line(data = dados.vi %>% filter(sexo == "F"),
+            aes(x = idade, y = exp, color = "VI demais MQC Fem.")) +
+  
+  geom_line(data = dados.vg.cot %>% filter(sexo == "M"),
+            aes(x = idade, y = exp, color = "VG cotado MQC Masc.")) +
+  geom_line(data = dados.vg.cot %>% filter(sexo == "F"),
+            aes(x = idade, y = exp, color = "VG cotado MQC Fem.")) +
+  
+  geom_line(data = dados.vg.pres %>% filter(sexo == "M"),
+            aes(x = idade, y = exp, color = "VG prestamista MQC Masc.")) +
+  geom_line(data = dados.vg.pres %>% filter(sexo == "F"),
+            aes(x = idade, y = exp, color = "VG prestamista MQC Fem.")) +
+  
+    geom_line(data = dados %>% filter(sexo == "M"),
+            aes(x = idade, y = exp, color = "MQC Masc.")) +
+  geom_line(data = dados %>% filter(sexo == "F"),
+            aes(x = idade, y = exp, color = "MQC Fem.")) +
+  
+  theme_bw() + 
+  ggtitle("Exposição, por Idade") +
+  scale_x_continuous(n.breaks = 10) +
+  #scale_y_continuous(breaks = seq(5000, 400000, by = 25000)) +
+  scale_color_manual(values = aux.cor) + 
+  labs(y = "Exposição", x = "Idade", color = "") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', y = -.3))
+```
+
+#### Óbitos
+
+```{r}
+ggplot() +
+  geom_line(data = dados.vi %>% filter(sexo == "M"),
+            aes(x = idade, y = obt, color = "VI demais MQC Masc.")) +
+  geom_line(data = dados.vi %>% filter(sexo == "F"),
+            aes(x = idade, y = obt, color = "VI demais MQC Fem.")) +
+  
+  geom_line(data = dados.vg.cot %>% filter(sexo == "M"),
+            aes(x = idade, y = obt, color = "VG cotado MQC Masc.")) +
+  geom_line(data = dados.vg.cot %>% filter(sexo == "F"),
+            aes(x = idade, y = obt, color = "VG cotado MQC Fem.")) +
+  
+  geom_line(data = dados.vg.pres %>% filter(sexo == "M"),
+            aes(x = idade, y = obt, color = "VG prestamista MQC Masc.")) +
+  geom_line(data = dados.vg.pres %>% filter(sexo == "F"),
+            aes(x = idade, y = obt, color = "VG prestamista MQC Fem.")) +
+  
+  geom_line(data = dados %>% filter(sexo == "M"),
+            aes(x = idade, y = obt, color = "MQC Masc.")) +
+  geom_line(data = dados %>% filter(sexo == "F"),
+            aes(x = idade, y = obt, color = "MQC Fem.")) +
+  
+  theme_bw() + 
+  ggtitle("Óbitos, por Idade") +
+  scale_x_continuous(n.breaks = 10) +
+  scale_y_continuous(breaks = seq(0, 600, by = 100)) +
+  scale_color_manual(values = aux.cor) + 
+  labs(y = "Óbitos", x = "Idade", color = "") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', y = -.3))
+```
+:::
+
+### Exposição e Óbitos por Ano na Janela Temporal (2019-2024)
+
+::::: panel-tabset
+#### Exposição
+
+::: panel-tabset
+##### VI demais MQC
+
+```{r}
+data.item %>% filter(ano %in% 2019:2024, idade %in% 10:100) %>%
+  filter(grupoPrecificacao == prods[4]) %>%
+  select(ano, idade, sexo, exp, obt, obtNatural, obtAcidental) %>%
+  group_by(ano, idade, sexo) %>%
+  summarise(
+    exp = sum(exp),
+    obt = sum(obt),,
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) %>%
+  mutate(sexo = case_when(sexo == "F" ~ "Feminino",
+                          sexo == "M" ~ "Masculino"),
+         ano = as.character(ano)) %>%
+  mutate(sexo.aux = factor(sexo, levels=c("Masculino", "Feminino"))) -> dados2.vi
+
+n_years <- length(unique(dados2.vi$ano))
+
+ggplot(dados2.vi) +
+  geom_line(aes(x = idade, y = exp, color = ano))+
+  theme_bw() + 
+  ggtitle("Exposição, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10) +
+  labs(y = "Exposição", x = "Idade", color = "") +
+    scale_color_manual(values = rainbow(n_years+1)) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', x = 0.2, y = -.2))
+```
+
+##### VG cotado MQC
+
+```{r}
+data.item %>% filter(ano %in% 2019:2024, idade %in% 10:100) %>%
+  filter(grupoPrecificacao == prods[2]) %>%
+  select(ano, idade, sexo, exp, obt, obtNatural, obtAcidental) %>%
+  group_by(ano, idade, sexo) %>%
+  summarise(
+    exp = sum(exp),
+    obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) %>%
+  mutate(sexo = case_when(sexo == "F" ~ "Feminino",
+                          sexo == "M" ~ "Masculino"),
+         ano = as.character(ano)) %>%
+  mutate(sexo.aux = factor(sexo, levels=c("Masculino", "Feminino"))) -> dados2.vg.cot
+
+ggplot(dados2.vg.cot) +
+  geom_line(aes(x = idade, y = exp, color = ano))+
+  theme_bw() + 
+  ggtitle("Exposição, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10) +
+  labs(y = "Exposição", x = "Idade", color = "") +
+    scale_color_manual(values = rainbow(n_years+1)) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', x = 0.2, y = -.2))
+```
+
+##### VG prestamista MQC
+
+```{r}
+data.item %>% filter(ano %in% 2019:2024, idade %in% 10:100) %>%
+  filter(grupoPrecificacao == prods[3]) %>%
+  select(ano, idade, sexo, exp, obt, obtNatural, obtAcidental) %>%
+  group_by(ano, idade, sexo) %>%
+  summarise(
+    exp = sum(exp),
+    obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) %>%
+  mutate(sexo = case_when(sexo == "F" ~ "Feminino",
+                          sexo == "M" ~ "Masculino"),
+         ano = as.character(ano)) %>%
+  mutate(sexo.aux = factor(sexo, levels=c("Masculino", "Feminino"))) -> dados2.vg.pres
+
+ggplot(dados2.vg.pres) +
+  geom_line(aes(x = idade, y = exp, color = ano))+
+  theme_bw() + 
+  ggtitle("Exposição, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10) +
+  labs(y = "Exposição", x = "Idade", color = "") +
+    scale_color_manual(values = rainbow(n_years+1)) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', x = 0.2, y = -.2))
+```
+
+##### MQC
+
+```{r}
+data.item %>% filter(ano %in% 2019:2024, idade %in% 10:100) %>%
+  filter(grupoPrecificacao == prods[1]) %>%
+  select(ano, idade, sexo, exp, obt, obtNatural, obtAcidental) %>%
+  group_by(ano, idade, sexo) %>%
+  summarise(
+    exp = sum(exp),
+    obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) %>%
+  mutate(sexo = case_when(sexo == "F" ~ "Feminino",
+                          sexo == "M" ~ "Masculino"),
+         ano = as.character(ano)) %>%
+  mutate(sexo.aux = factor(sexo, levels=c("Masculino", "Feminino"))) -> dados2
+
+ggplot(dados2) +
+  geom_line(aes(x = idade, y = exp, color = ano))+
+  theme_bw() + 
+  ggtitle("Exposição, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10) +
+  labs(y = "Exposição", x = "Idade", color = "") +
+    scale_color_manual(values = rainbow(n_years+1)) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', x = 0.2, y = -.2))
+```
+:::
+
+#### Óbitos
+
+::: panel-tabset
+##### VI demais MQC
+
+```{r}
+ggplot(dados2.vi) +
+  geom_line(aes(x = idade, y = obt, color = ano))+
+  theme_bw() + 
+  ggtitle("Óbitos, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10) +
+  labs(y = "Óbitos", x = "Idade", color = "") +
+    scale_color_manual(values = rainbow(n_years+1)) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', x = 0.2, y = -.2))
+
+```
+
+##### VG cotado MQC
+
+```{r}
+ggplot(dados2.vg.cot) +
+  geom_line(aes(x = idade, y = obt, color = ano))+
+  theme_bw() + 
+  ggtitle("Óbitos, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10) +
+  labs(y = "Óbitos", x = "Idade", color = "") +
+    scale_color_manual(values = rainbow(n_years+1)) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', x = 0.2, y = -.2))
+
+```
+
+##### VG prestamista MQC
+
+```{r}
+ggplot(dados2.vg.pres) +
+  geom_line(aes(x = idade, y = obt, color = ano))+
+  theme_bw() + 
+  ggtitle("Óbitos, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10) +
+  labs(y = "Óbitos", x = "Idade", color = "") +
+    scale_color_manual(values = rainbow(n_years+1)) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', x = 0.2, y = -.2))
+
+```
+
+##### MQC
+
+```{r}
+ggplot(dados2) +
+  geom_line(aes(x = idade, y = obt, color = ano))+
+  theme_bw() + 
+  ggtitle("Óbitos, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10) +
+  labs(y = "Óbitos", x = "Idade", color = "") +
+    scale_color_manual(values = rainbow(n_years+1)) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', x = 0.2, y = -.2))
+
+```
+:::
+:::::
+
+### Taxas Brutas
+
+Devido ao baixo volume de informação para o produto VG cotado MQC, os dados foram agrupados em intervalos de 5 em 5 idades para ambas as populações.
+
+::: panel-tabset
+#### VI demais MQC
+
+```{r}
+dados2.vi <- dados2.vi %>%
+  mutate(mx = obt/exp)
+
+agg.vi <- dados2.vi %>%
+  group_by(idade, sexo.aux) %>%
+  summarise(exp = sum(exp), obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) %>%
+  mutate(mx = obt/exp, log_mx = log(obt/exp))
+
+
+ggplot() +
+  geom_point(data = dados2.vi, aes(x = idade, y = mx, color = ano), alpha = .3) +
+  geom_line(data = agg.vi, aes(x = idade, y = mx, color = "Taxa bruta por idade")) +
+  theme_bw() + 
+  ggtitle("Taxa Bruta de Mortalidade, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+  scale_y_continuous(trans = "log10", limits = c(0.00005, 0.5)) +
+  labs(y = "Taxa de Mortalidade", x = "Idade", color = "") +
+  scale_color_manual(values = c(rainbow(n_years), "black")) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', y = -.2))
+```
+
+#### VG cotado MQC
+
+```{r}
+datag <- as.data.frame(cbind(idade = 10:100, pesos = c(rep(seq(12, 97, by = 5), each = 5), 97)))
+
+dados2.vg.cot <- dados2.vg.cot %>%
+  left_join(datag, by = "idade") %>%
+  group_by(ano, sexo.aux, pesos) %>%
+  summarise(exp = sum(exp), obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) %>%
+  mutate(mx = obt/exp)
+
+agg.vg.cot <- dados2.vg.cot %>%
+  group_by(pesos, sexo.aux) %>%
+  summarise(exp = sum(exp), obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) %>%
+  mutate(mx = obt/exp, log_mx = log(obt/exp))
+
+
+ggplot() +
+  geom_point(data = dados2.vg.cot, aes(x = pesos, y = mx, color = ano), alpha = .3) +
+  geom_line(data = agg.vg.cot, aes(x = pesos, y = mx, color = "Taxa bruta por idade")) +
+  theme_bw() + 
+  ggtitle("Taxa Bruta de Mortalidade, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+  scale_y_continuous(trans = "log10", limits = c(0.00005, 0.5)) +
+  labs(y = "Taxa de Mortalidade", x = "Idade", color = "") +
+  scale_color_manual(values = c(rainbow(n_years), "black")) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', y = -.2))
+```
+
+#### VG prestamista MQC
+
+```{r}
+dados2.vg.pres <- dados2.vg.pres %>%
+  mutate(mx = obt/exp)
+
+agg.vg.pres <- dados2.vg.pres %>%
+  group_by(idade, sexo.aux) %>%
+  summarise(exp = sum(exp), obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) %>%
+  mutate(mx = obt/exp, log_mx = log(obt/exp))
+
+
+ggplot() +
+  geom_point(data = dados2.vg.pres, aes(x = idade, y = mx, color = ano), alpha = .3) +
+  geom_line(data = agg.vg.pres, aes(x = idade, y = mx, color = "Taxa bruta por idade")) +
+  theme_bw() + 
+  ggtitle("Taxa Bruta de Mortalidade, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+  scale_y_continuous(trans = "log10", limits = c(0.00005, 0.5)) +
+  labs(y = "Taxa de Mortalidade", x = "Idade", color = "") +
+  scale_color_manual(values = c(rainbow(n_years), "black")) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', y = -.2))
+```
+
+#### MQC
+
+```{r}
+dados2 <- dados2 %>%
+  mutate(mx = obt/exp)
+
+agg <- dados2 %>%
+  group_by(idade, sexo.aux) %>%
+  summarise(exp = sum(exp), obt = sum(obt),
+            obtNatural = sum(obtNatural),
+            obtAcidental = sum(obtAcidental)) %>%
+  mutate(mx = obt/exp, log_mx = log(obt/exp))
+
+
+ggplot() +
+  geom_point(data = dados2, aes(x = idade, y = mx, color = ano), alpha = .3) +
+  geom_line(data = agg, aes(x = idade, y = mx, color = "Taxa bruta por idade")) +
+  theme_bw() + 
+  ggtitle("Taxa Bruta de Mortalidade, por Ano-Sexo") +
+  scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+  scale_y_continuous(trans = "log10", limits = c(0.00005, 0.5)) +
+  labs(y = "Taxa de Mortalidade", x = "Idade", color = "") +
+  scale_color_manual(values = c(rainbow(n_years), "black")) +
+  facet_wrap(~sexo.aux, scales = "fixed") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', y = -.2))
+```
+:::
+
+## Modelagem
+
+O processo de modelagem implementa um modelo dinâmico de crescimento linear considerando os intervalos de idade de 20 até os 80 anos para as *populações masculinas* dos produtos VI demais MQC/VG prestamista MQC e 22 até 77 anos (\~ 20-79 anos) para a cobertura VG cotado MQC. Para as *populações femininas*, consideramos intervalos de idade de 27-80 anos para os produtos VI demais MQC/VG prestamista MQC e 27-77 anos (\~ 25-79 anos) para a cobertura VG cotado MQC.
+
+```{r}
+#agg.vi, dados2.vg.cot, agg.vg.pres, agg
+
+data_agg_vi_M <- agg.vi %>% filter(sexo.aux == "Masculino", idade %in% 20:80)
+fit.vid.M <- dlm(y = data_agg_vi_M$log_mx, ages = 20:80)
+
+data_agg_vi_F <- agg.vi %>% filter(sexo.aux == "Feminino", idade %in% 27:80)
+fit.vid.F <- dlm(y = data_agg_vi_F$log_mx, ages = 27:80)
+
+data_agg_vgcot_M <- agg.vg.cot %>% filter(sexo.aux == "Masculino", pesos %in% 20:80) %>% mutate(ages = pesos)
+fit.vgcot.M <- dlm(y = data_agg_vgcot_M$log_mx, ages = data_agg_vgcot_M$pesos)
+
+data_agg_vgcot_F <- agg.vg.cot %>% filter(sexo.aux == "Feminino", pesos %in% 27:80) %>% mutate(ages = pesos)
+fit.vgcot.F <- dlm(y = data_agg_vgcot_F$log_mx, ages = data_agg_vgcot_F$pesos)
+
+data_agg_vgprest_M <- agg.vg.pres %>% filter(sexo.aux == "Masculino", idade %in% 20:80)
+fit.vgprest.M <- dlm(y = data_agg_vgprest_M$log_mx, ages = 20:80)
+
+data_agg_vgprest_F <- agg.vg.pres %>% filter(sexo.aux == "Feminino", idade %in% 27:80)
+fit.vgprest.F <- dlm(y = data_agg_vgprest_F$log_mx, ages = 27:80)
+
+data_agg_mqc_M <- agg %>% filter(sexo.aux == "Masculino", idade %in% 20:80)
+fit.mqc.M <- dlm(y = data_agg_mqc_M$log_mx, ages = 20:80)
+
+data_agg_mqc_F <- agg %>% filter(sexo.aux == "Feminino", idade %in% 27:80)
+fit.mqc.F <- dlm(y = data_agg_mqc_F$log_mx, ages = 27:80)
+
+mx.vid.m <- fitted(fit.vid.M)
+mx.vid.f <- fitted(fit.vid.F)
+mx.vgcot.m <- fitted(fit.vgcot.M)
+mx.vgcot.f <- fitted(fit.vgcot.F)
+mx.vgpres.m <- fitted(fit.vgprest.M)
+mx.vgpres.f <- fitted(fit.vgprest.F)
+mx.uniq.m <- fitted(fit.mqc.M)
+mx.uniq.f <- fitted(fit.mqc.F)
+```
+
+```{r}
+fit.vid <- readRDS("fit_vid_dlm.RDS")
+fit.vgcot <- readRDS("fit_vgcot_dlm.RDS")
+fit.vgpres <- readRDS("fit_vgpres_dlm.RDS")
+fit.uniq <- readRDS("fit_uniq_dlm.RDS")
+# 
+# mx.vid.m <- fitted(fit.vid$fit.m)
+# mx.vid.f <- fitted(fit.vid$fit.f)
+# mx.vgcot.m <- fitted(fit.vgcot$fit.m)
+# mx.vgcot.f <- fitted(fit.vgcot$fit.f)
+# mx.vgpres.m <- fitted(fit.vgpres$fit.m)
+# mx.vgpres.f <- fitted(fit.vgpres$fit.f)
+# mx.uniq.m <- fitted(fit.uniq$fit.m)
+# mx.uniq.f <- fitted(fit.uniq$fit.f)
+
+
+
+ggplot() +
+  geom_point(data = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",],
+             aes(x = idade, y = mx, color = "VI demais MQC Masc."), alpha = .3) +
+  geom_point(data = agg.vi[agg.vi$sexo.aux == "Masculino",],
+             aes(x = idade, y = mx, color = "VI demais MQC Masc."), alpha = .3, shape = 1) +
+  
+  geom_point(data = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",],
+             aes(x = idade, y = mx, color = "VI demais MQC Fem."), alpha = .3) +
+  geom_point(data = agg.vi[agg.vi$sexo.aux == "Feminino",],
+             aes(x = idade, y = mx, color = "VI demais MQC Fem."), alpha = .3, shape = 1) +
+  
+  
+  geom_point(data = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",],
+             aes(x = pesos, y = mx, color = "VG cotado MQC Masc."), alpha = .3) +
+  geom_point(data = agg.vg.cot[agg.vg.cot$sexo.aux == "Masculino",],
+             aes(x = pesos, y = mx, color = "VG cotado MQC Masc."), alpha = .3, shape = 1) +
+  
+  geom_point(data = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",],
+             aes(x = pesos, y = mx, color = "VG cotado MQC Fem."), alpha = .3) +
+  geom_point(data = agg.vg.cot[agg.vg.cot$sexo.aux == "Feminino",],
+             aes(x = pesos, y = mx, color = "VG cotado MQC Fem."), alpha = .3, shape = 1) +
+  
+  
+  geom_point(data = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",],
+             aes(x = idade, y = mx, color = "VG prestamista MQC Masc."), alpha = .3) +
+  geom_point(data = agg.vg.pres[agg.vg.pres$sexo.aux == "Masculino",],
+             aes(x = idade, y = mx, color = "VG prestamista MQC Masc."), alpha = .3, shape = 1) +
+  
+  geom_point(data = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",],
+             aes(x = idade, y = mx, color = "VG prestamista MQC Fem."), alpha = .3) +
+  geom_point(data = agg.vg.pres[agg.vg.pres$sexo.aux == "Feminino",],
+             aes(x = idade, y = mx, color = "VG prestamista MQC Fem."), alpha = .3, shape = 1) +
+  
+  
+    geom_point(data = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",],
+             aes(x = idade, y = mx, color = "MQC Masc."), alpha = .3) +
+  geom_point(data = agg[agg$sexo.aux == "Masculino",],
+             aes(x = idade, y = mx, color = "MQC Masc."), alpha = .3, shape = 1) +
+  
+  geom_point(data = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",],
+             aes(x = idade, y = mx, color = "MQC Fem."), alpha = .3) +
+  geom_point(data = agg[agg$sexo.aux == "Feminino",],
+             aes(x = idade, y = mx, color = "MQC Fem."), alpha = .3, shape = 1) +
+  
+  
+  geom_line(data = mx.vid.m, aes(x = age, y = -log(1 - qx.fitted), color = "VI demais MQC Masc.")) +
+  geom_line(data = mx.vid.f, aes(x = age, y = -log(1 - qx.fitted), color = "VI demais MQC Fem.")) +
+  
+
+  geom_line(data = mx.vgcot.m, aes(x = age, y = -log(1 - qx.fitted), color = "VG cotado MQC Masc.")) +
+  geom_line(data = mx.vgcot.f, aes(x = age, y = -log(1 - qx.fitted), color = "VG cotado MQC Fem.")) +
+  
+  geom_line(data = mx.vgpres.m, aes(x = age, y = -log(1 - qx.fitted), color = "VG prestamista MQC Masc.")) +
+  geom_line(data = mx.vgpres.f, aes(x = age, y = -log(1 - qx.fitted), color = "VG prestamista MQC Fem.")) +
+  geom_line(data = mx.uniq.m, aes(x = age, y = -log(1 - qx.fitted), color = "MQC Masc.")) +
+  geom_line(data = mx.uniq.f, aes(x = age, y = -log(1 - qx.fitted), color = "MQC Fem.")) +
+
+  theme_bw() + 
+  ggtitle("") +
+  scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+  scale_y_continuous(trans = "log10", limits = c(0.00005, 0.5)) +
+  scale_color_manual(values = aux.cor) + 
+  labs(y = "Taxa de Mortalidade", x = "Idade", color = "") -> pt
+
+ggplotly(pt) %>% layout(legend = list(orientation = 'h', y = -.2))
+```
+
+
+
+```{r}
+#Para visualizar as diferenças entre as estimativas pontuais para cada cobertura, vamos #fixar a tábua de referência como a tábua da união das populações (MQC) e calcular os #desvios de cada produto.
+
+# aux.m <- data.frame(x = fit.vid$fit.m$info$ages,
+#                   mx.uniq.m = -log(1-mx.uniq.m$qx.fitted),
+#                   mx.vid.m = -log(1-mx.vid.m$qx.fitted),
+#                   mx.vgpres.m = -log(1-mx.vgpres.m$qx.fitted))
+# 
+# aux.f <- data.frame(x = fit.vid$fit.f$info$ages,
+#                   mx.uniq.f = -log(1-mx.uniq.f$qx.fitted),
+#                   mx.vid.f = -log(1-mx.vid.f$qx.fitted),
+#                   mx.vgpres.f = -log(1-mx.vgpres.f$qx.fitted))
+# 
+# ggplot(aux.m) +
+#   
+#   geom_point(aes(x = scale(mx.uniq.m), y = scale(mx.vid.m), color = "VI demais MQC Masc.")) +
+#   geom_point(aes(x = scale(mx.uniq.m), y = scale(mx.vgpres.m), color = "VG prestamista MQC Masc.")) +
+#   geom_point(data = data.frame(mx.vgcot.m = -log(1-mx.vgcot.m$qx.fitted),
+#                               mx.uniq.m = -log(1-mx.uniq.m[c(seq(3, 51, by = 5), 51),2])),
+#             aes(x = scale(mx.uniq.m), y = scale(mx.vgcot.m), color = "VG cotado MQC Masc.")) +
+#   geom_abline(intercept = 0, slope = 1, alpha = 0.7) +
+#   
+#   geom_point(data = aux.f, 
+#              aes(x = scale(mx.uniq.f), y = scale(mx.vid.f), color = "VI demais MQC Fem.")) +
+#   geom_point(data = aux.f,
+#              aes(x = scale(mx.uniq.f), y = scale(mx.vgpres.f), color = "VG prestamista MQC Fem.")) +
+#   geom_point(data = data.frame(mx.vgcot.f = -log(1-mx.vgcot.f$qx.fitted),
+#                               mx.uniq.f = -log(1-mx.uniq.f[c(seq(1, 44, by = 5), 44), 2])),
+#             aes(x = scale(mx.uniq.f), y = scale(mx.vgcot.f), color = "VG cotado MQC Fem.")) +
+# 
+#   theme_bw() + 
+#   ggtitle("") +
+#   #scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+#   #scale_y_continuous(trans = "log10", limits = c(0.00005, 0.5)) +
+#   scale_color_manual(values = aux.cor) + 
+#   labs(y = "Dispersão", x = "Idade", color = "") -> pt
+# 
+# ggplotly(pt) %>% layout(legend = list(orientation = 'h', y = -.2))
+```
+
+Nos gráficos abaixo, podemos comparar as curvas ajustadas via modelagem (VI demais MQC/VG cotado MQC/VG prestamista MQC) com um desagravo das tábuas de referência BR-EMSmt/BR-EMSsb, v.2015 e v.2021, AT-83 basic e CSO-80.
+
+::: panel-tabset
+### VI demais MQC
+
+```{r}
+# desagravo
+br2015 <- read.csv2("BREMS_2015.csv")
+br2021 <- read.csv2("BREMS_2021.csv")
+at83 <- read.csv("at83_tabuas.csv", dec = ",")
+cso80 <- read.csv("cso80_tabuas.csv", dec = ",")
+
+# NT 2020 & estudo 2024
+br2015 %>% filter(Tipo == "SOB") %>%
+  mutate(mx = -log(1 - PROB)) %>%
+  select(Idade, GEN, mx) -> sb15.old
+
+aux_desagravos_brs <- function(qx_obs, Ex, ids, sex){
+  d1 <- desagravo(qx_obs = qx_obs, Ex = Ex,
+                  qx_fit = br2015 %>% filter(Idade %in% ids,
+                                             GEN == sex,Tipo == "MOR") %>% pull(PROB))
+  d2 <- desagravo(qx_obs = qx_obs, Ex = Ex,
+                  qx_fit = br2015 %>% filter(Idade %in% ids,
+                                             GEN == sex,Tipo == "SOB") %>% pull(PROB))
+  d3 <- desagravo(qx_obs = qx_obs, Ex = Ex,
+                  qx_fit = br2021 %>% filter(Idade %in% ids,
+                                             GEN == sex,Tipo == "MOR") %>% pull(PROB))
+  d4 <- desagravo(qx_obs = qx_obs, Ex = Ex,
+                  qx_fit = br2021 %>% filter(Idade %in% ids,
+                                             GEN == sex,Tipo == "SOB") %>% pull(PROB))
+  return(list(des.mt15 = d1,
+              des.sb15 = d2,
+              des.mt21 = d3,
+              des.sb21 = d4))
+}
+
+br.m.vi <- aux_desagravos_brs(qx_obs = mx.vid.m$qx.fitted,
+                    Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp, ids = mx.vid.m$age, sex = "Masculino")
+
+br.f.vi <- aux_desagravos_brs(qx_obs = mx.vid.f$qx.fitted,
+                    Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp, ids = mx.vid.f$age, sex = "Feminino")
+
+at.m.vi <- desagravo(qx_obs = mx.vid.m$qx.fitted,
+                     Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp,
+                     qx_fit = at83 %>% filter(Idade %in% mx.vid.m$age) %>% pull(at83.m))
+at.f.vi <- desagravo(qx_obs = mx.vid.f$qx.fitted,
+                     Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp,
+                     qx_fit = at83 %>% filter(Idade %in% mx.vid.f$age) %>% pull(at83.f))
+
+cso.m.vi <- desagravo(qx_obs = mx.vid.m$qx.fitted,
+                     Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp,
+                     qx_fit = cso80 %>% filter(Idade %in% mx.vid.m$age) %>% pull(cso80))
+cso.f.vi <- desagravo(qx_obs = mx.vid.f$qx.fitted,
+                     Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp,
+                     qx_fit = cso80 %>% filter(Idade %in% mx.vid.f$age) %>% pull(cso80))
+
+
+ggplot() +
+  geom_point(data = agg.vi[agg.vi$sexo.aux == "Masculino" & agg.vi$idade %in% mx.vid.m$age,],
+             aes(x = idade, y = mx, color = "Taxa bruta Masc."), alpha = .3) +
+  geom_point(data = agg.vi[agg.vi$sexo.aux == "Masculino",],
+             aes(x = idade, y = mx, color = "Taxa bruta Masc."), alpha = .3, shape = 1) +
+
+  geom_line(data = br.m.vi$des.mt15$qx_dez %>% as.data.frame, aes(x = mx.vid.m$age, y = -log(1-.), color = paste("BR-EMSmt v.2015-m", br.m.vi$des.mt15$pc_dez))) +
+  geom_line(data = br.m.vi$des.sb15$qx_dez %>% as.data.frame, aes(x = mx.vid.m$age, y = -log(1-.), color = paste("BR-EMSsb v.2015-m", br.m.vi$des.sb15$pc_dez))) +
+  geom_line(data = br.m.vi$des.mt21$qx_dez %>% as.data.frame, aes(x = mx.vid.m$age, y = -log(1-.), color = paste("BR-EMSmt v.2021-m", br.m.vi$des.mt21$pc_dez))) +
+  geom_line(data = br.m.vi$des.sb21$qx_dez %>% as.data.frame, aes(x = mx.vid.m$age, y = -log(1-.), color = paste("BR-EMSsb v.2021-m", br.m.vi$des.sb21$pc_dez))) +
+  
+  geom_line(data = sb15.old %>% filter(GEN == "Masculino"), aes(x = Idade, y = mx, color = "BR-EMSsb v.2015-m (2024)"), linetype = "dashed") +
+  geom_line(data = at.m.vi$qx_dez %>% as.data.frame(), aes(x = mx.vid.m$age, y = -log(1-.), color = paste("AT83 MALE (IAM)", at.m.vi$pc_dez))) +
+  
+  geom_line(data = cso.m.vi$qx_dez %>% as.data.frame(), aes(x = mx.vid.m$age, y = -log(1-.), color = paste("CSO-80", cso.m.vi$pc_dez))) +
+  
+  geom_point(data = agg.vi[agg.vi$sexo.aux == "Feminino" & agg.vi$idade %in% mx.vid.f$age,],
+             aes(x = idade, y = mx, color = "Taxa bruta Fem."), alpha = .3) +
+  geom_point(data = agg.vi[agg.vi$sexo.aux == "Feminino",],
+             aes(x = idade, y = mx, color = "Taxa bruta Fem."), alpha = .3, shape = 1) +
+  
+  geom_line(data = br.f.vi$des.mt15$qx_dez %>% as.data.frame, aes(x = mx.vid.f$age, y = -log(1-.), color = paste("BR-EMSmt v.2015-f", br.f.vi$des.mt15$pc_dez))) +
+  geom_line(data = br.f.vi$des.sb15$qx_dez %>% as.data.frame, aes(x = mx.vid.f$age, y = -log(1-.), color = paste("BR-EMSsb v.2015-f", br.f.vi$des.sb15$pc_dez))) +
+  geom_line(data = br.f.vi$des.mt21$qx_dez %>% as.data.frame, aes(x = mx.vid.f$age, y = -log(1-.), color = paste("BR-EMSmt v.2021-f", br.f.vi$des.mt21$pc_dez))) +
+  geom_line(data = br.f.vi$des.sb21$qx_dez %>% as.data.frame, aes(x = mx.vid.f$age, y = -log(1-.), color = paste("BR-EMSsb v.2021-f", br.f.vi$des.sb21$pc_dez))) +
+  
+  geom_line(data = sb15.old %>% filter(GEN == "Feminino"), aes(x = Idade, y = mx, color = "BR-EMSsb v.2015-f (2024)"), linetype = "dashed") +
+  geom_line(data = at.f.vi$qx_dez %>% as.data.frame(), aes(x = mx.vid.f$age, y = -log(1-.), color = paste("AT83 FEMALE (IAM)", at.f.vi$pc_dez))) +
+  
+  geom_line(data = cso.f.vi$qx_dez %>% as.data.frame(), aes(x = mx.vid.f$age, y = -log(1-.), color = paste("CSO-80", cso.f.vi$pc_dez))) +
+
+  geom_line(data = mx.vid.m, aes(x = age, y = -log(1 - qx.fitted), color = "Curvas ajustadas"), alpha = .3) +
+  geom_line(data = mx.vid.f, aes(x = age, y = -log(1 - qx.fitted), color = "Curvas ajustadas"), alpha = .3) +
+
+  theme_bw() +
+  ggtitle("") +
+  scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+  scale_y_continuous(trans = "log10", limits = c(0.00005, 0.1)) +
+  labs(y = "Taxa de Invalidez", x = "Idade", color = "")  -> pt
+
+ggplotly(pt) #%>% layout(legend = list(orientation = 'h', y = -.3))
+```
+
+### VG cotado MQC
+
+```{r}
+# desagravo
+br.m.vgcot <- aux_desagravos_brs(qx_obs = mx.vgcot.m$qx.fitted,
+                    Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp, ids = mx.vgcot.m$age, sex = "Masculino")
+
+br.f.vgcot <- aux_desagravos_brs(qx_obs = mx.vgcot.f$qx.fitted,
+                    Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp, ids = mx.vgcot.f$age, sex = "Feminino")
+
+at.m.vgcot <- desagravo(qx_obs = mx.vgcot.m$qx.fitted,
+                     Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp,
+                     qx_fit = at83 %>% filter(Idade %in% mx.vgcot.m$age) %>% pull(at83.m))
+at.f.vgcot<- desagravo(qx_obs = mx.vgcot.f$qx.fitted,
+                     Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp,
+                     qx_fit = at83 %>% filter(Idade %in% mx.vgcot.f$age) %>% pull(at83.f))
+
+cso.m.vgcot <- desagravo(qx_obs = mx.vgcot.m$qx.fitted,
+                     Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp,
+                     qx_fit = cso80 %>% filter(Idade %in% mx.vgcot.m$age) %>% pull(cso80))
+cso.f.vgcot <- desagravo(qx_obs = mx.vgcot.f$qx.fitted,
+                     Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp,
+                     qx_fit = cso80 %>% filter(Idade %in% mx.vgcot.f$age) %>% pull(cso80))
+
+
+ggplot() +
+  geom_point(data = agg.vg.cot[agg.vg.cot$sexo.aux == "Masculino" & agg.vg.cot$pesos %in% mx.vgcot.m$age,],
+             aes(x = pesos, y = mx, color = "Taxa bruta Masc."), alpha = .3) +
+  geom_point(data = agg.vg.cot[agg.vg.cot$sexo.aux == "Masculino",],
+             aes(x = pesos, y = mx, color = "Taxa bruta Masc."), alpha = .3, shape = 1) +
+
+  geom_line(data = br.m.vgcot$des.mt15$qx_dez %>% as.data.frame, aes(x = mx.vgcot.m$age, y = -log(1-.), color = paste("BR-EMSmt v.2015-m", br.m.vgcot$des.mt15$pc_dez))) +
+  geom_line(data = br.m.vgcot$des.sb15$qx_dez %>% as.data.frame, aes(x = mx.vgcot.m$age, y = -log(1-.), color = paste("BR-EMSsb v.2015-m", br.m.vgcot$des.sb15$pc_dez))) +
+  geom_line(data = br.m.vgcot$des.mt21$qx_dez %>% as.data.frame, aes(x = mx.vgcot.m$age, y = -log(1-.), color = paste("BR-EMSmt v.2021-m", br.m.vgcot$des.mt21$pc_dez))) +
+  geom_line(data = br.m.vgcot$des.sb21$qx_dez %>% as.data.frame, aes(x = mx.vgcot.m$age, y = -log(1-.), color = paste("BR-EMSsb v.2021-m", br.m.vgcot$des.sb21$pc_dez))) +
+  
+  geom_line(data = sb15.old %>% filter(GEN == "Masculino"), aes(x = Idade, y = mx, color = "BR-EMSsb v.2015-m (2024)"), linetype = "dashed") +
+  
+  geom_line(data = at.m.vgcot$qx_dez %>% as.data.frame(), aes(x = mx.vgcot.m$age, y = -log(1-.), color = paste("AT83 MALE (IAM)", at.m.vgcot$pc_dez))) +
+  
+  geom_line(data = cso.m.vgcot$qx_dez %>% as.data.frame(), aes(x = mx.vgcot.m$age, y = -log(1-.), color = paste("CSO-80", cso.m.vgcot$pc_dez))) +
+  
+  geom_point(data = agg.vg.cot[agg.vg.cot$sexo.aux == "Feminino" & agg.vg.cot$pesos %in% mx.vid.f$age,],
+             aes(x = pesos, y = mx, color = "Taxa bruta Fem."), alpha = .3) +
+  geom_point(data = agg.vg.cot[agg.vg.cot$sexo.aux == "Feminino",],
+             aes(x = pesos, y = mx, color = "Taxa bruta Fem."), alpha = .3, shape = 1) +
+  
+  geom_line(data = br.f.vgcot$des.mt15$qx_dez %>% as.data.frame(), aes(x = mx.vgcot.f$age, y = -log(1-.), color = paste("BR-EMSmt v.2015-f", br.f.vgcot$des.mt15$pc_dez))) +
+  geom_line(data = br.f.vgcot$des.sb15$qx_dez %>% as.data.frame(), aes(x = mx.vgcot.f$age, y = -log(1-.), color = paste("BR-EMSsb v.2015-f", br.f.vgcot$des.sb15$pc_dez))) +
+  geom_line(data = br.f.vgcot$des.mt21$qx_dez %>% as.data.frame(), aes(x = mx.vgcot.f$age, y = -log(1-.), color = paste("BR-EMSmt v.2021-f", br.f.vgcot$des.mt21$pc_dez))) +
+  geom_line(data = br.f.vgcot$des.sb21$qx_dez %>% as.data.frame(), aes(x = mx.vgcot.f$age, y = -log(1-.), color = paste("BR-EMSsb v.2021-f", br.f.vgcot$des.sb21$pc_dez))) +
+  
+  geom_line(data = sb15.old %>% filter(GEN == "Feminino"), aes(x = Idade, y = mx, color = "BR-EMSsb v.2015-f (2024)"), linetype = "dashed") +
+  
+  geom_line(data = at.f.vgcot$qx_dez %>% as.data.frame(), aes(x = mx.vgcot.f$age, y = -log(1-.), color = paste("AT83 FEMALE (IAM)", at.f.vgcot$pc_dez))) +
+  
+  geom_line(data = cso.f.vgcot$qx_dez %>% as.data.frame(), aes(x = mx.vgcot.f$age, y = -log(1-.), color = paste("CSO-80", cso.f.vgcot$pc_dez))) +
+
+  geom_line(data = mx.vgcot.m, aes(x = age, y = -log(1 - qx.fitted), color = "Curvas ajustadas"), alpha = .3) +
+  geom_line(data = mx.vgcot.f, aes(x = age, y = -log(1 - qx.fitted), color = "Curvas ajustadas"), alpha = .3) +
+
+  theme_bw() +
+  ggtitle("") +
+  scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+  scale_y_continuous(trans = "log10", limits = c(0.00005, 0.1)) +
+  labs(y = "Taxa de Invalidez", x = "Idade", color = "")  -> pt
+
+ggplotly(pt) #%>% layout(legend = list(orientation = 'h', y = -.3))
+```
+
+### VG prestamista MQC
+
+```{r}
+# desagravo
+br.m.vgpres <- aux_desagravos_brs(qx_obs = mx.vgpres.m$qx.fitted,
+                    Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp, ids = mx.vgpres.m$age, sex = "Masculino")
+
+br.f.vgpres <- aux_desagravos_brs(qx_obs = mx.vgpres.f$qx.fitted,
+                    Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp, ids = mx.vgpres.f$age, sex = "Feminino")
+
+at.m.vgpres <- desagravo(qx_obs = mx.vgpres.m$qx.fitted,
+                     Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp,
+                     qx_fit = at83 %>% filter(Idade %in% mx.vgpres.m$age) %>% pull(at83.m))
+at.f.vgpres <- desagravo(qx_obs = mx.vgpres.f$qx.fitted,
+                     Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp,
+                     qx_fit = at83 %>% filter(Idade %in% mx.vid.f$age) %>% pull(at83.f))
+
+cso.m.vgpres <- desagravo(qx_obs = mx.vid.m$qx.fitted,
+                     Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp,
+                     qx_fit = cso80 %>% filter(Idade %in% mx.vgpres.m$age) %>% pull(cso80))
+cso.f.vgpres <- desagravo(qx_obs = mx.vid.f$qx.fitted,
+                     agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp,
+                     qx_fit = cso80 %>% filter(Idade %in% mx.vgpres.f$age) %>% pull(cso80))
+
+
+
+ggplot() +
+  geom_point(data = agg.vg.pres[agg.vg.pres$sexo.aux == "Masculino" & agg.vg.pres$idade %in% mx.vgpres.m$age,],
+             aes(x = idade, y = mx, color = "Taxa bruta Masc."), alpha = .3) +
+  geom_point(data = agg.vg.pres[agg.vg.pres$sexo.aux == "Masculino",],
+             aes(x = idade, y = mx, color = "Taxa bruta Masc."), alpha = .3, shape = 1) +
+
+  geom_line(data = br.m.vgpres$des.mt15$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.m$age, y = -log(1-.), color = paste("BR-EMSmt v.2015-m", br.m.vgpres$des.mt15$pc_dez))) +
+  geom_line(data = br.m.vgpres$des.sb15$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.m$age, y = -log(1-.), color = paste("BR-EMSsb v.2015-m", br.m.vgpres$des.sb15$pc_dez))) +
+  geom_line(data = br.m.vgpres$des.mt21$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.m$age, y = -log(1-.), color = paste("BR-EMSmt v.2021-m", br.m.vgpres$des.mt21$pc_dez))) +
+  geom_line(data = br.m.vgpres$des.sb21$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.m$age, y = -log(1-.), color = paste("BR-EMSsb v.2021-m", br.m.vgpres$des.sb21$pc_dez))) +
+  
+  geom_line(data = sb15.old %>% filter(GEN == "Masculino"), aes(x = Idade, y = mx, color = "BR-EMSsb v.2015-m (2024)"), linetype = "dashed") +
+  
+    geom_line(data = at.m.vgpres$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.m$age, y = -log(1-.), color = paste("AT83 MALE (IAM)", at.m.vgpres$pc_dez))) +
+  
+  geom_line(data = cso.m.vgpres$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.m$age, y = -log(1-.), color = paste("CSO-80", cso.m.vgpres$pc_dez))) +
+  
+  geom_point(data = agg.vg.pres[agg.vg.pres$sexo.aux == "Feminino" & agg.vg.pres$idade %in% mx.vgpres.f$age,],
+             aes(x = idade, y = mx, color = "Taxa bruta Fem."), alpha = .3) +
+  geom_point(data = agg.vg.pres[agg.vg.pres$sexo.aux == "Feminino",],
+             aes(x = idade, y = mx, color = "Taxa bruta Fem."), alpha = .3, shape = 1) +
+  
+  geom_line(data = br.f.vgpres$des.mt15$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.f$age, y = -log(1-.), color = paste("BR-EMSmt v.2015-f", br.f.vgpres$des.mt15$pc_dez))) +
+  geom_line(data = br.f.vgpres$des.sb15$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.f$age, y = -log(1-.), color = paste("BR-EMSsb v.2015-f", br.f.vgpres$des.sb15$pc_dez))) +
+  geom_line(data = br.f.vgpres$des.mt21$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.f$age, y = -log(1-.), color = paste("BR-EMSmt v.2021-f", br.f.vgpres$des.mt21$pc_dez))) +
+  geom_line(data = br.f.vgpres$des.sb21$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.f$age, y = -log(1-.), color = paste("BR-EMSsb v.2021-f", br.f.vgpres$des.sb21$pc_dez))) +
+  
+  geom_line(data = sb15.old %>% filter(GEN == "Feminino"), aes(x = Idade, y = mx, color = "BR-EMSsb v.2015-f (2024)"), linetype = "dashed") +
+  
+  geom_line(data = at.f.vgpres$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.f$age, y = -log(1-.), color = paste("AT83 FEMALE (IAM)", at.f.vgpres$pc_dez))) +
+  
+  geom_line(data = cso.f.vgpres$qx_dez %>% as.data.frame(), aes(x = mx.vgpres.f$age, y = -log(1-.), color = paste("CSO-80", cso.f.vgpres$pc_dez))) +
+
+  geom_line(data = mx.vgpres.m, aes(x = age, y = -log(1 - qx.fitted), color = "Curvas ajustadas"), alpha = .3) +
+  geom_line(data = mx.vgpres.f, aes(x = age, y = -log(1 - qx.fitted), color = "Curvas ajustadas"), alpha = .3) +
+
+  theme_bw() +
+  ggtitle("") +
+  scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+  scale_y_continuous(trans = "log10", limits = c(0.00005, 0.1)) +
+  labs(y = "Taxa de Invalidez", x = "Idade", color = "")  -> pt
+
+ggplotly(pt) #%>% layout(legend = list(orientation = 'h', y = -.3))
+```
+
+### MQC
+
+```{r}
+
+br.m.uniq <- aux_desagravos_brs(qx_obs = mx.uniq.m$qx.fitted,
+                    Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp, ids = mx.uniq.m$age, sex = "Masculino")
+
+br.f.uniq <- aux_desagravos_brs(qx_obs = mx.uniq.f$qx.fitted,
+                    Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp, ids = mx.uniq.f$age, sex = "Feminino")
+
+at.m.uniq <- desagravo(qx_obs = mx.uniq.m$qx.fitted,
+                     Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp,
+                     qx_fit = at83 %>% filter(Idade %in% mx.uniq.m$age) %>% pull(at83.m))
+at.f.uniq <- desagravo(qx_obs = mx.uniq.f$qx.fitted,
+                     Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp,
+                     qx_fit = at83 %>% filter(Idade %in% mx.uniq.f$age) %>% pull(at83.f))
+
+cso.m.uniq <- desagravo(qx_obs = mx.uniq.m$qx.fitted,
+                     Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp,
+                     qx_fit = cso80 %>% filter(Idade %in% mx.uniq.m$age) %>% pull(cso80))
+cso.f.uniq <- desagravo(qx_obs = mx.uniq.f$qx.fitted,
+                     Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp,
+                     qx_fit = cso80 %>% filter(Idade %in% mx.uniq.f$age) %>% pull(cso80))
+
+
+ggplot() +
+  geom_point(data = agg[agg$sexo.aux == "Masculino" & agg$idade %in% mx.uniq.m$age,],
+             aes(x = idade, y = mx, color = "Taxa bruta Masc."), alpha = .3) +
+  geom_point(data = agg[agg$sexo.aux == "Masculino",],
+             aes(x = idade, y = mx, color = "Taxa bruta Masc."), alpha = .3, shape = 1) +
+
+  geom_line(data = br.m.uniq$des.mt15$qx_dez %>% as.data.frame, aes(x = mx.uniq.m$age, y = -log(1-.), color = paste("BR-EMSmt v.2015-m", br.m.uniq$des.mt15$pc_dez))) +
+  geom_line(data = br.m.uniq$des.sb15$qx_dez %>% as.data.frame, aes(x = mx.uniq.m$age, y = -log(1-.), color = paste("BR-EMSsb v.2015-m", br.m.uniq$des.sb15$pc_dez))) +
+  geom_line(data = br.m.uniq$des.mt21$qx_dez %>% as.data.frame, aes(x = mx.uniq.m$age, y = -log(1-.), color = paste("BR-EMSmt v.2021-m", br.m.uniq$des.mt21$pc_dez))) +
+  geom_line(data = br.m.uniq$des.sb21$qx_dez %>% as.data.frame, aes(x = mx.uniq.m$age, y = -log(1-.), color = paste("BR-EMSsb v.2021-m", br.m.uniq$des.sb21$pc_dez))) +
+  
+  geom_line(data = sb15.old %>% filter(GEN == "Masculino"), aes(x = Idade, y = mx, color = "BR-EMSsb v.2015-m (2024)"), linetype = "dashed") +
+  geom_line(data = at.m.uniq$qx_dez %>% as.data.frame(), aes(x = mx.uniq.m$age, y = -log(1-.), color = paste("AT83 MALE (IAM)", at.m.uniq$pc_dez))) +
+  
+  geom_line(data = cso.m.uniq$qx_dez %>% as.data.frame(), aes(x = mx.uniq.m$age, y = -log(1-.), color = paste("CSO-80", cso.m.uniq$pc_dez))) +
+  
+  geom_point(data = agg[agg$sexo.aux == "Feminino" & agg$idade %in% mx.uniq.f$age,],
+             aes(x = idade, y = mx, color = "Taxa bruta Fem."), alpha = .3) +
+  geom_point(data = agg[agg$sexo.aux == "Feminino",],
+             aes(x = idade, y = mx, color = "Taxa bruta Fem."), alpha = .3, shape = 1) +
+  
+  geom_line(data = br.f.uniq$des.mt15$qx_dez %>% as.data.frame, aes(x = mx.uniq.f$age, y = -log(1-.), color = paste("BR-EMSmt v.2015-f", br.f.uniq$des.mt15$pc_dez))) +
+  geom_line(data = br.f.uniq$des.sb15$qx_dez %>% as.data.frame, aes(x = mx.uniq.f$age, y = -log(1-.), color = paste("BR-EMSsb v.2015-f", br.f.uniq$des.sb15$pc_dez))) +
+  geom_line(data = br.f.uniq$des.mt21$qx_dez %>% as.data.frame, aes(x = mx.uniq.f$age, y = -log(1-.), color = paste("BR-EMSmt v.2021-f", br.f.uniq$des.mt21$pc_dez))) +
+  geom_line(data = br.f.uniq$des.sb21$qx_dez %>% as.data.frame, aes(x = mx.uniq.f$age, y = -log(1-.), color = paste("BR-EMSsb v.2021-f", br.f.uniq$des.sb21$pc_dez))) +
+  
+  geom_line(data = sb15.old %>% filter(GEN == "Feminino"), aes(x = Idade, y = mx, color = "BR-EMSsb v.2015-f (2024)"), linetype = "dashed") +
+  geom_line(data = at.f.uniq$qx_dez %>% as.data.frame(), aes(x = mx.uniq.f$age, y = -log(1-.), color = paste("AT83 FEMALE (IAM)", at.f.uniq$pc_dez))) +
+  
+  geom_line(data = cso.f.uniq$qx_dez %>% as.data.frame(), aes(x = mx.uniq.f$age, y = -log(1-.), color = paste("CSO-80", cso.f.uniq$pc_dez))) +
+
+  geom_line(data = mx.uniq.m, aes(x = age, y = -log(1 - qx.fitted), color = "Curvas ajustadas"), alpha = .3) +
+  geom_line(data = mx.uniq.f, aes(x = age, y = -log(1 - qx.fitted), color = "Curvas ajustadas"), alpha = .3) +
+
+  theme_bw() +
+  ggtitle("") +
+  scale_x_continuous(n.breaks = 10, limits = c(10, 90)) +
+  scale_y_continuous(trans = "log10", limits = c(0.00005, 0.1)) +
+  labs(y = "Taxa de Invalidez", x = "Idade", color = "")  -> pt
+
+ggplotly(pt) #%>% layout(legend = list(orientation = 'h', y = -.3))
+```
+:::
+
+<br>
+
+## Testes de Aderência e EQM
+
+Obs: Como temos exposição muito alta na população masculina, foi usada uma técnica de redução de dimensionalidade nesta população para deixar o teste de aderência menos criterioso.
+
+::: panel-tabset
+#### VI demais MQC
+
+```{r}
+c = 2
+
+agg.vi <- agg.vi %>%
+  mutate(exp = if_else(sexo.aux == "Masculino", exp / c, exp),
+        obt = if_else(sexo.aux == "Masculino", obt / c, obt))
+
+t.m <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+               qxfit = -log(1 - mx.vid.m$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-mx.vid.m$qx.fitted)) )
+
+t_mt15.m <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vi$des.mt15$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vi$des.mt15$qx_dez)) )
+
+t_sb15.m <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vi$des.sb15$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vi$des.sb15$qx_dez)) )
+
+aux <- sb15.old %>% filter(Idade %in% mx.vid.m$age, GEN == "Masculino") %>% pull(mx)
+t_sb15.m.old <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+                 qxfit = aux,
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$mx,
+             qxfit = aux) )
+
+t_mt21.m <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vi$des.mt21$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vi$des.mt21$qx_dez)) )
+
+t_sb21.m <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vi$des.sb21$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vi$des.sb21$qx_dez)) )
+
+t_at.m <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-at.m.vi$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-at.m.vi$qx_dez)) )
+
+t_cso.m <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-cso.m.vi$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-cso.m.vi$qx_dez)) )
+
+
+t.f <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+               qxfit = -log(1 - mx.vid.f$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-mx.vid.f$qx.fitted)) )
+
+t_mt15.f <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vi$des.mt15$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vi$des.mt15$qx_dez)) )
+
+t_sb15.f <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vi$des.sb15$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vi$des.sb15$qx_dez)) )
+
+aux <- sb15.old %>% filter(Idade %in% mx.vid.f$age, GEN == "Feminino") %>% pull(mx)
+t_sb15.f.old <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+                 qxfit = aux,
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$mx,
+             qxfit = aux) )
+
+t_mt21.f <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vi$des.mt21$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vi$des.mt21$qx_dez)) )
+
+t_sb21.f <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vi$des.sb21$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vi$des.sb21$qx_dez)) )
+
+t_at.f <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-at.f.vi$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-at.f.vi$qx_dez)) )
+
+t_cso.f <- c(teste(Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-cso.f.vi$qx_dez),
+                 Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-cso.f.vi$qx_dez)) )
+
+
+# res <- cbind(matrix(c("SICOOB-VIdemaisMQC v.2025-m", t.m,
+#                       "BR-EMSsb v.2015-m (2024)", t_sb15.m.old,
+#                       paste("BR-EMSmt v.2015-m", br.m.vi$des.mt15$pc_dez), t_mt15.m,
+#                       paste("BR-EMSsb v.2015-m", br.m.vi$des.sb15$pc_dez), t_sb15.m,
+#                       paste("BR-EMSmt v.2021-m", br.m.vi$des.mt21$pc_dez), t_mt21.m,
+#                       paste("BR-EMSsb v.2021-m", br.m.vi$des.sb21$pc_dez), t_sb21.m,
+#                       paste("AT83 MALE (IAM)", at.m.vi$pc_dez), t_at.m,
+#                       paste("CSO-80", cso.m.vi$pc_dez), t_cso.m,
+#                       "SICOOB-VIdemaisMQC v.2025-f", t.f,
+#                       "BR-EMSsb v.2015-f (2024)", t_sb15.f.old,
+#                       paste("BR-EMSmt v.2015-f", br.f.vi$des.mt15$pc_dez), t_mt15.f,
+#                       paste("BR-EMSsb v.2015-f", br.f.vi$des.sb15$pc_dez), t_sb15.f,
+#                       paste("BR-EMSmt v.2021-f", br.f.vi$des.mt21$pc_dez), t_mt21.f,
+#                       paste("BR-EMSsb v.2021-f", br.f.vi$des.sb21$pc_dez), t_sb21.f,
+#                       paste("AT83 FEMALE (IAM)", at.f.vi$pc_dez), t_at.f,
+#                       paste("CSO-80", cso.f.vi$pc_dez), t_cso.f),
+#                     nrow = 16, ncol = 3, byrow = T),
+#                     c(" aderente ",
+#                       " não aderente",
+#                       " aderente ",
+#                       " aderente ",
+#                       " não aderente ",
+#                       " não aderente ",
+#                       " não aderente",
+#                       " aderente ",
+#                       " aderente",
+#                       " aderente",
+#                       " aderente ",
+#                       " aderente ",
+#                       " aderente ",
+#                       " não aderente ",
+#                       " não aderente ",
+#                       " aderente "))
+# 
+# colnames(res) <- c(" ", "p-valor", "EQM", "Aderencia")
+# 
+# res_df <- as.data.frame(res)
+# 
+# res_df %>% as.data.frame() %>%
+#   knitr::kable() %>%
+#   kableExtra::row_spec(which(res == "aderente"), bold = TRUE) %>%
+#   kableExtra::row_spec(8, extra_css = "border-bottom: 1px solid") %>%
+#   kableExtra::kable_styling()
+
+nomes <- c("SICOOB-VIdemaisMQC v.2025-m",
+           "BR-EMSsb v.2015-m (2024)",
+           paste("BR-EMSmt v.2015-m", br.m.vi$des.mt15$pc_dez),
+           paste("BR-EMSsb v.2015-m", br.m.vi$des.sb15$pc_dez),
+           paste("BR-EMSmt v.2021-m", br.m.vi$des.mt21$pc_dez),
+           paste("BR-EMSsb v.2021-m", br.m.vi$des.sb21$pc_dez),
+           paste("AT83 MALE (IAM)", at.m.vi$pc_dez),
+           paste("CSO-80", cso.m.vi$pc_dez),
+           "SICOOB-VIdemaisMQC v.2025-f",
+           "BR-EMSsb v.2015-f (2024)",
+           paste("BR-EMSmt v.2015-f", br.f.vi$des.mt15$pc_dez),
+           paste("BR-EMSsb v.2015-f", br.f.vi$des.sb15$pc_dez),
+           paste("BR-EMSmt v.2021-f", br.f.vi$des.mt21$pc_dez),
+           paste("BR-EMSsb v.2021-f", br.f.vi$des.sb21$pc_dez),
+           paste("AT83 FEMALE (IAM)", at.f.vi$pc_dez),
+           paste("CSO-80", cso.f.vi$pc_dez))
+
+# 2. Agrupe seus 16 vetores de resultado em uma LISTA
+# (Presumindo que cada variável já existe no seu ambiente)
+lista_resultados <- list(
+  t.m, t_sb15.m.old, t_mt15.m, t_sb15.m, t_mt21.m, t_sb21.m, t_at.m, t_cso.m,
+  t.f, t_sb15.f.old, t_mt15.f, t_sb15.f, t_mt21.f, t_sb21.f, t_at.f, t_cso.f
+)
+
+# 3. Use sapply para "fatiar" a lista e extrair os dados
+#    - Pega o elemento [1] (p-valor) de cada item da lista
+#    - Pega o elemento [2] (EQM) de cada item da lista
+p_valores <- sapply(lista_resultados, function(item) item[1])
+meus_eqms <- sapply(lista_resultados, function(item) item[2])
+
+# 4. Crie o data frame final
+res_df <- data.frame(
+  ` ` = nomes,
+  `p-valor` = p_valores,
+  `EQM` = meus_eqms,
+  `Aderencia` = ifelse(p_valores > 0.05, "aderente", "não aderente"),
+  check.names = FALSE # Impede o R de trocar "p-valor" por "p.valor"
+)
+
+# 5. Agora seu pipe do kable funciona perfeitamente
+res_df %>%
+  knitr::kable(digits = 4) %>% # Adicionei 'digits = 4' para formatar os p-valores
+  kableExtra::row_spec(which(res_df$Aderencia == "aderente"), bold = TRUE) %>%
+  kableExtra::row_spec(8, extra_css = "border-bottom: 1px solid") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+#### VG cotado MQC
+
+```{r}
+
+agg.vg.cot <- agg.vg.cot %>% 
+  mutate(exp = if_else(sexo.aux == "Masculino", exp / c, exp),
+        obt = if_else(sexo.aux == "Masculino", obt / c, obt))
+
+t.m <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+               qxfit = -log(1 - mx.vgcot.m$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-mx.vgcot.m$qx.fitted)) )
+
+t_mt15.m <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vgcot$des.mt15$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vgcot$des.mt15$qx_dez)) )
+
+t_sb15.m <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vgcot$des.sb15$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vgcot$des.sb15$qx_dez)) )
+
+aux <- sb15.old %>% filter(Idade %in% mx.vgcot.m$age, GEN == "Masculino") %>% pull(mx)
+t_sb15.m.old <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+                 qxfit = aux,
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$mx,
+             qxfit = aux) )
+
+t_mt21.m <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vgcot$des.mt21$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vgcot$des.mt21$qx_dez)) )
+
+t_sb21.m <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vgcot$des.sb21$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vgcot$des.sb21$qx_dez)) )
+
+t_at.m <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-at.m.vgcot$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-at.m.vgcot$qx_dez)) )
+
+t_cso.m <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-cso.m.vgcot$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-cso.m.vgcot$qx_dez)) )
+
+
+t.f <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+               qxfit = -log(1 - mx.vgcot.f$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-mx.vgcot.f$qx.fitted)) )
+
+t_mt15.f <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vgcot$des.mt15$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vgcot$des.mt15$qx_dez)) )
+
+t_sb15.f <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vgcot$des.sb15$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vgcot$des.sb15$qx_dez)) )
+
+aux <- sb15.old %>% filter(Idade %in% mx.vgcot.f$age, GEN == "Feminino") %>% pull(mx)
+t_sb15.f.old <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+                 qxfit = aux,
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$mx,
+             qxfit = aux) )
+
+t_mt21.f <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vgcot$des.mt21$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vgcot$des.mt21$qx_dez)) )
+
+t_sb21.f <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vgcot$des.sb21$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vgcot$des.sb21$qx_dez)) )
+
+t_at.f <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-at.f.vgcot$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-at.f.vgcot$qx_dez)) )
+
+t_cso.f <- c(teste(Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-cso.f.vgcot$qx_dez),
+                 Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-cso.f.vgcot$qx_dez)) )
+
+
+nomes <- c("SICOOB-VIdemaisMQC v.2025-m",
+           "BR-EMSsb v.2015-m (2024)",
+           paste("BR-EMSmt v.2015-m", br.m.vgcot$des.mt15$pc_dez),
+           paste("BR-EMSsb v.2015-m", br.m.vgcot$des.sb15$pc_dez),
+           paste("BR-EMSmt v.2021-m", br.m.vgcot$des.mt21$pc_dez),
+           paste("BR-EMSsb v.2021-m", br.m.vgcot$des.sb21$pc_dez),
+           paste("AT83 MALE (IAM)", at.m.vgcot$pc_dez),
+           paste("CSO-80", cso.m.vgcot$pc_dez),
+           "SICOOB-VIdemaisMQC v.2025-f",
+           "BR-EMSsb v.2015-f (2024)",
+           paste("BR-EMSmt v.2015-f", br.f.vgcot$des.mt15$pc_dez),
+           paste("BR-EMSsb v.2015-f", br.f.vgcot$des.sb15$pc_dez),
+           paste("BR-EMSmt v.2021-f", br.f.vgcot$des.mt21$pc_dez),
+           paste("BR-EMSsb v.2021-f", br.f.vgcot$des.sb21$pc_dez),
+           paste("AT83 FEMALE (IAM)", at.f.vgcot$pc_dez),
+           paste("CSO-80", cso.f.vgcot$pc_dez))
+
+# 2. Agrupe seus 16 vetores de resultado em uma LISTA
+# (Presumindo que cada variável já existe no seu ambiente)
+lista_resultados <- list(
+  t.m, t_sb15.m.old, t_mt15.m, t_sb15.m, t_mt21.m, t_sb21.m, t_at.m, t_cso.m,
+  t.f, t_sb15.f.old, t_mt15.f, t_sb15.f, t_mt21.f, t_sb21.f, t_at.f, t_cso.f
+)
+
+# 3. Use sapply para "fatiar" a lista e extrair os dados
+#    - Pega o elemento [1] (p-valor) de cada item da lista
+#    - Pega o elemento [2] (EQM) de cada item da lista
+p_valores <- sapply(lista_resultados, function(item) item[1])
+meus_eqms <- sapply(lista_resultados, function(item) item[2])
+
+# 4. Crie o data frame final
+res_df <- data.frame(
+  ` ` = nomes,
+  `p-valor` = p_valores,
+  `EQM` = meus_eqms,
+  `Aderencia` = ifelse(p_valores > 0.05, "aderente", "não aderente"),
+  check.names = FALSE # Impede o R de trocar "p-valor" por "p.valor"
+)
+
+# 5. Agora seu pipe do kable funciona perfeitamente
+res_df %>%
+  knitr::kable(digits = 4) %>% # Adicionei 'digits = 4' para formatar os p-valores
+  kableExtra::row_spec(which(res_df$Aderencia == "aderente"), bold = TRUE) %>%
+  kableExtra::row_spec(8, extra_css = "border-bottom: 1px solid") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+#### VG prestamista MQC
+
+```{r}
+
+agg.vg.pres <- agg.vg.pres %>% 
+  mutate(exp = if_else(sexo.aux == "Masculino", exp / (2*c), exp),
+        obt = if_else(sexo.aux == "Masculino", obt / (2*c), obt))
+
+t.m <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+               qxfit = -log(1 - mx.vgpres.m$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-mx.vgpres.m$qx.fitted)) )
+
+t_mt15.m <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vgpres$des.mt15$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vgpres$des.mt15$qx_dez)) )
+
+t_sb15.m <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vgpres$des.sb15$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vgpres$des.sb15$qx_dez)) )
+
+aux <- sb15.old %>% filter(Idade %in% mx.vgpres.m$age, GEN == "Masculino") %>% pull(mx)
+t_sb15.m.old <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+                  qxfit = aux,
+                  Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp),
+          EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$mx,
+              qxfit = aux) )
+
+t_mt21.m <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vgpres$des.mt21$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vgpres$des.mt21$qx_dez)) )
+
+t_sb21.m <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.vgpres$des.sb21$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.vgpres$des.sb21$qx_dez)) )
+
+t_at.m <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-at.m.vgpres$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-at.m.vgpres$qx_dez)) )
+
+t_cso.m <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-cso.m.vgpres$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-cso.m.vgpres$qx_dez)) )
+
+
+t.f <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+               qxfit = -log(1 - mx.vgpres.f$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-mx.vgpres.f$qx.fitted)) )
+
+t_mt15.f <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vgpres$des.mt15$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vgpres$des.mt15$qx_dez)) )
+
+t_sb15.f <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vgpres$des.sb15$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vgpres$des.sb15$qx_dez)) )
+
+aux <- sb15.old %>% filter(Idade %in% mx.vgpres.f$age, GEN == "Feminino") %>% pull(mx)
+t_sb15.f.old <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+                 qxfit = aux,
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$mx,
+             qxfit = aux) )
+
+t_mt21.f <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vgpres$des.mt21$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vgpres$des.mt21$qx_dez)) )
+
+t_sb21.f <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.vgpres$des.sb21$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.vgpres$des.sb21$qx_dez)) )
+
+t_at.f <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-at.f.vgpres$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-at.f.vgpres$qx_dez)) )
+
+t_cso.f <- c(teste(Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-cso.f.vgpres$qx_dez),
+                 Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-cso.f.vgpres$qx_dez)) )
+
+
+nomes <- c("SICOOB-VIdemaisMQC v.2025-m",
+           "BR-EMSsb v.2015-m (2024)",
+           paste("BR-EMSmt v.2015-m", br.m.vgpres$des.mt15$pc_dez),
+           paste("BR-EMSsb v.2015-m", br.m.vgpres$des.sb15$pc_dez),
+           paste("BR-EMSmt v.2021-m", br.m.vgpres$des.mt21$pc_dez),
+           paste("BR-EMSsb v.2021-m", br.m.vgpres$des.sb21$pc_dez),
+           paste("AT83 MALE (IAM)", at.m.vgpres$pc_dez),
+           paste("CSO-80", cso.m.vgpres$pc_dez),
+           "SICOOB-VIdemaisMQC v.2025-f",
+           "BR-EMSsb v.2015-f (2024)",
+           paste("BR-EMSmt v.2015-f", br.f.vgpres$des.mt15$pc_dez),
+           paste("BR-EMSsb v.2015-f", br.f.vgpres$des.sb15$pc_dez),
+           paste("BR-EMSmt v.2021-f", br.f.vgpres$des.mt21$pc_dez),
+           paste("BR-EMSsb v.2021-f", br.f.vgpres$des.sb21$pc_dez),
+           paste("AT83 FEMALE (IAM)", at.f.vgpres$pc_dez),
+           paste("CSO-80", cso.f.vgpres$pc_dez))
+
+# 2. Agrupe seus 16 vetores de resultado em uma LISTA
+# (Presumindo que cada variável já existe no seu ambiente)
+lista_resultados <- list(
+  t.m, t_sb15.m.old, t_mt15.m, t_sb15.m, t_mt21.m, t_sb21.m, t_at.m, t_cso.m,
+  t.f, t_sb15.f.old, t_mt15.f, t_sb15.f, t_mt21.f, t_sb21.f, t_at.f, t_cso.f
+)
+
+# 3. Use sapply para "fatiar" a lista e extrair os dados
+#    - Pega o elemento [1] (p-valor) de cada item da lista
+#    - Pega o elemento [2] (EQM) de cada item da lista
+p_valores <- sapply(lista_resultados, function(item) item[1])
+meus_eqms <- sapply(lista_resultados, function(item) item[2])
+
+# 4. Crie o data frame final
+res_df <- data.frame(
+  ` ` = nomes,
+  `p-valor` = p_valores,
+  `EQM` = meus_eqms,
+  `Aderencia` = ifelse(p_valores > 0.05, "aderente", "não aderente"),
+  check.names = FALSE # Impede o R de trocar "p-valor" por "p.valor"
+)
+
+# 5. Agora seu pipe do kable funciona perfeitamente
+res_df %>%
+  knitr::kable(digits = 4) %>% # Adicionei 'digits = 4' para formatar os p-valores
+  kableExtra::row_spec(which(res_df$Aderencia == "aderente"), bold = TRUE) %>%
+  kableExtra::row_spec(8, extra_css = "border-bottom: 1px solid") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+#### MQC
+
+```{r}
+
+agg <- agg %>% 
+  mutate(exp = if_else(sexo.aux == "Masculino", exp / (2*c), exp),
+        obt = if_else(sexo.aux == "Masculino", obt / (2*c), obt))
+
+t.m <- c(teste(Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+               qxfit = -log(1 - mx.uniq.m$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-mx.uniq.m$qx.fitted)) )
+
+t_mt15.m <- c(teste(Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.uniq$des.mt15$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.uniq$des.mt15$qx_dez)) )
+
+t_sb15.m <- c(teste(Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.uniq$des.sb15$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.uniq$des.sb15$qx_dez)) )
+
+aux <- sb15.old %>% filter(Idade %in% mx.uniq.m$age, GEN == "Masculino") %>% pull(mx)
+t_sb15.m.old <- c(teste(Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+                 qxfit = aux,
+                 Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$mx,
+             qxfit = aux) )
+
+t_mt21.m <- c(teste(Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.uniq$des.mt21$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.uniq$des.mt21$qx_dez)) )
+
+t_sb21.m <- c(teste(Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-br.m.uniq$des.sb21$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-br.m.uniq$des.sb21$qx_dez)) )
+
+t_at.m <- c(teste(Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-at.m.uniq$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-at.m.uniq$qx_dez)) )
+
+t_cso.m <- c(teste(Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+                 qxfit = -log(1-cso.m.uniq$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$mx,
+             qxfit = -log(1-cso.m.uniq$qx_dez)) )
+
+
+t.f <- c(teste(Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+               qxfit = -log(1 - mx.uniq.f$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-mx.uniq.f$qx.fitted)) )
+
+t_mt15.f <- c(teste(Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.uniq$des.mt15$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.uniq$des.mt15$qx_dez)) )
+
+t_sb15.f <- c(teste(Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.uniq$des.sb15$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.uniq$des.sb15$qx_dez)) )
+
+aux <- sb15.old %>% filter(Idade %in% mx.uniq.f$age, GEN == "Feminino") %>% pull(mx)
+t_sb15.f.old <- c(teste(Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+                 qxfit = aux,
+                 Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$mx,
+             qxfit = aux) )
+
+t_mt21.f <- c(teste(Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.uniq$des.mt21$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.uniq$des.mt21$qx_dez)) )
+
+t_sb21.f <- c(teste(Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-br.f.uniq$des.sb21$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-br.f.uniq$des.sb21$qx_dez)) )
+
+t_at.f <- c(teste(Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-at.f.uniq$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-at.f.uniq$qx_dez)) )
+
+t_cso.f <- c(teste(Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+                 qxfit = -log(1-cso.f.uniq$qx_dez),
+                 Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp),
+         EQM(qx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$mx,
+             qxfit = -log(1-cso.f.uniq$qx_dez)) )
+
+
+nomes <- c("SICOOB-VIdemaisMQC v.2025-m",
+           "BR-EMSsb v.2015-m (2024)",
+           paste("BR-EMSmt v.2015-m", br.m.uniq$des.mt15$pc_dez),
+           paste("BR-EMSsb v.2015-m", br.m.uniq$des.sb15$pc_dez),
+           paste("BR-EMSmt v.2021-m", br.m.uniq$des.mt21$pc_dez),
+           paste("BR-EMSsb v.2021-m", br.m.uniq$des.sb21$pc_dez),
+           paste("AT83 MALE (IAM)", at.m.uniq$pc_dez),
+           paste("CSO-80", cso.m.uniq$pc_dez),
+           "SICOOB-VIdemaisMQC v.2025-f",
+           "BR-EMSsb v.2015-f (2024)",
+           paste("BR-EMSmt v.2015-f", br.f.uniq$des.mt15$pc_dez),
+           paste("BR-EMSsb v.2015-f", br.f.uniq$des.sb15$pc_dez),
+           paste("BR-EMSmt v.2021-f", br.f.uniq$des.mt21$pc_dez),
+           paste("BR-EMSsb v.2021-f", br.f.uniq$des.sb21$pc_dez),
+           paste("AT83 FEMALE (IAM)", at.f.uniq$pc_dez),
+           paste("CSO-80", cso.f.uniq$pc_dez))
+
+# 2. Agrupe seus 16 vetores de resultado em uma LISTA
+# (Presumindo que cada variável já existe no seu ambiente)
+lista_resultados <- list(
+  t.m, t_sb15.m.old, t_mt15.m, t_sb15.m, t_mt21.m, t_sb21.m, t_at.m, t_cso.m,
+  t.f, t_sb15.f.old, t_mt15.f, t_sb15.f, t_mt21.f, t_sb21.f, t_at.f, t_cso.f
+)
+
+# 3. Use sapply para "fatiar" a lista e extrair os dados
+#    - Pega o elemento [1] (p-valor) de cada item da lista
+#    - Pega o elemento [2] (EQM) de cada item da lista
+p_valores <- sapply(lista_resultados, function(item) item[1])
+meus_eqms <- sapply(lista_resultados, function(item) item[2])
+
+# 4. Crie o data frame final
+res_df <- data.frame(
+  ` ` = nomes,
+  `p-valor` = p_valores,
+  `EQM` = meus_eqms,
+  `Aderencia` = ifelse(p_valores > 0.05, "aderente", "não aderente"),
+  check.names = FALSE # Impede o R de trocar "p-valor" por "p.valor"
+)
+
+# 5. Agora seu pipe do kable funciona perfeitamente
+res_df %>%
+  knitr::kable(digits = 4) %>% # Adicionei 'digits = 4' para formatar os p-valores
+  kableExtra::row_spec(which(res_df$Aderencia == "aderente"), bold = TRUE) %>%
+  kableExtra::row_spec(8, extra_css = "border-bottom: 1px solid") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+:::
+
+<br>
+
+Para avaliar o erro do tipo I (rejeitar a hipótese nula quando ela é verdadeira) e o erro do tipo II (não rejeitar a hipótese nula quando ela é falsa) do teste de aderência empregado anteriormente, fixamos as tábuas testadas como hipótese alternativa para aderência aos dados, ficando com, por exemplo:
+
+-   $H_0$: Tábua SICOOB proposta é aderente aos dados;
+-   $H_1$: BR-EMS desagravada é aderente aos dados.
+
+Fazendo com que os erros sejam interpretados como:
+
+-   Erro do Tipo I: Rejeito tábua SICOOB quando ela é aderente aos dados;
+-   Erro do Tipo II: Não rejeito tábua SICOOB quando BR-EMS des. é aderente aos dados.
+
+O teste é feito por simulação, buscando minimizar a combinação linear dos erros da forma $\lambda \alpha + (1 - \lambda)\beta$, onde $\alpha$ representa o erro do tipo I e $\beta$ representa o erro do tipo II. Colocamos maior peso para o erro do tipo II, definindo $\lambda = 0.4$ e definimos $\alpha = 0.15$ como o máximo tolerado para o erro do tipo I.
+
+```{r}
+opt_chisq_test <- function(Dx, ix.fit, Ex, ix.alt, alpha_w = 0.5, it = 10000) {
+  # alpha_weight: peso de alpha na minimização de C
+  # Simulação de H0: dados gerados com as taxas esperadas
+  chi_sq_h0 <- replicate(it, {
+    sim <- rpois(length(Dx), Ex*ix.fit)
+    epsilon <- (Dx * log(Dx/sim) ) - (Dx - sim)
+    2*sum(epsilon) ## estatistica
+  })
+  chi_sq_h0[which(chi_sq_h0 == Inf)] <- NA
+  
+  # Simulação de H1: pequenas perturbações nas taxas de mortalidade esperadas
+  #qxfit.p <- rnorm(length(Dx), mean = log(qxfit), sd = 1e-1)#sd = sd(qxfit))
+  chi_sq_h1 <- replicate(it, {
+    sim <- rpois(length(Dx), Ex*ix.alt)
+    epsilon <- (Dx * log(Dx/sim) ) - (Dx - sim)
+    2*sum(epsilon)
+  })
+  
+  # Testando diferentes pontos de corte c
+  c_values <- seq(quantile(chi_sq_h0, 0.85, na.rm = T), quantile(chi_sq_h0, 0.99, na.rm = T), length.out = 100)
+  
+  best_c <- rep(NA, 3)
+  min_cost <- Inf
+  
+  for (c in c_values) {
+    alpha <- mean(chi_sq_h0 > c, na.rm = T)  # Erro tipo I
+    beta <- mean(chi_sq_h1 <= c, na.rm = T)  # Erro tipo II
+    cost <- alpha_w*alpha + (1 - alpha_w)*beta
+    
+    if (cost < min_cost) {
+      min_cost <- cost
+      best_c[1] <- round(c, 2); best_c[2] <- round(alpha, 3); best_c[3] <- round(beta, 3)
+    }
+  }
+  names(best_c) <- c("c_star", "alpha", "beta")
+  return(best_c)
+}
+```
+
+::: panel-tabset
+#### VI demais MQC
+
+```{r}
+t_mt15.m <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vid.m$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vi$des.mt15$qx_dez),
+               alpha_w = 0.4)
+
+
+t_sb15.m <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vid.m$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vi$des.sb15$qx_dez),
+               alpha_w = 0.4)
+
+aux <- sb15.old %>% filter(Idade %in% mx.vid.m$age, GEN == "Masculino") %>% pull(mx)
+t_sb15.m.old <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vid.m$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp,
+               ix.alt = aux,
+               alpha_w = 0.4)
+
+t_mt21.m <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vid.m$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vi$des.mt21$qx_dez),
+               alpha_w = 0.4)
+
+t_sb21.m <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vid.m$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vi$des.sb21$qx_dez),
+               alpha_w = 0.4)
+
+t_at.m <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vid.m$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - at.m.vi$qx_dez),
+               alpha_w = 0.4)
+
+t_cso.m <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vid.m$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.m$age & agg.vi$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - cso.m.vi$qx_dez),
+               alpha_w = 0.4)
+
+
+
+t_mt15.f <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vid.f$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vi$des.mt15$qx_dez),
+               alpha_w = 0.4)
+
+t_sb15.f <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vid.f$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vi$des.sb15$qx_dez),
+               alpha_w = 0.4)
+
+aux <- sb15.old %>% filter(Idade %in% mx.vid.f$age, GEN == "Feminino") %>% pull(mx)
+t_sb15.f.old <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vid.f$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp,
+               ix.alt = aux,
+               alpha_w = 0.4)
+
+t_mt21.f <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vid.f$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vi$des.mt21$qx_dez),
+               alpha_w = 0.4)
+
+t_sb21.f <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vid.f$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vi$des.sb21$qx_dez),
+               alpha_w = 0.4)
+
+t_at.f <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vid.f$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - at.f.vi$qx_dez),
+               alpha_w = 0.4)
+
+t_cso.f <- opt_chisq_test(
+  Dx = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vid.f$qx.fitted),
+               Ex = agg.vi[agg.vi$idade %in% mx.vid.f$age & agg.vi$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - cso.f.vi$qx_dez),
+               alpha_w = 0.4)
+
+
+res <- matrix(c("BR-EMSsb v.2015-m (2024)", t_sb15.m.old,
+                      paste("BR-EMSmt v.2015-m", br.m.vi$des.mt15$pc_dez), t_mt15.m,
+                      paste("BR-EMSsb v.2015-m", br.m.vi$des.sb15$pc_dez), t_sb15.m,
+                      paste("BR-EMSmt v.2021-m", br.m.vi$des.mt21$pc_dez), t_mt21.m,
+                      paste("BR-EMSsb v.2021-m", br.m.vi$des.sb21$pc_dez), t_sb21.m,
+                      paste("AT83 MALE (IAM)", at.m.vi$pc_dez), t_at.m,
+                      paste("CSO-80", cso.m.vi$pc_dez), t_cso.m,
+                      "BR-EMSsb v.2015-f (2024)", t_sb15.f.old,
+                      paste("BR-EMSmt v.2015-f", br.f.vi$des.mt15$pc_dez), t_mt15.f,
+                      paste("BR-EMSsb v.2015-f", br.f.vi$des.sb15$pc_dez), t_sb15.f,
+                      paste("BR-EMSmt v.2021-f", br.f.vi$des.mt21$pc_dez), t_mt21.f,
+                      paste("BR-EMSsb v.2021-f", br.f.vi$des.sb21$pc_dez), t_sb21.f,
+                      paste("AT83 FEMALE (IAM)", at.f.vi$pc_dez), t_at.f,
+                      paste("CSO-80", cso.f.vi$pc_dez), t_cso.f),
+                    nrow = 14, ncol = 4, byrow = T)
+
+colnames(res) <- c("Tábua Alternativa", "Estatística", "Erro tipo I", "Erro tipo II")
+
+res %>% as.data.frame() %>%
+  knitr::kable() %>%
+  kableExtra::row_spec(c(2:3, 7, 8:11,14), bold = T) %>%
+  kableExtra::row_spec(7, extra_css = "border-bottom: 1px solid") %>%
+  kableExtra::kable_styling()
+```
+
+#### VG cotado MQC
+
+```{r}
+t_mt15.m <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.m$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vgcot$des.mt15$qx_dez),
+               alpha_w = 0.4)
+
+
+t_sb15.m <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.m$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vgcot$des.sb15$qx_dez),
+               alpha_w = 0.4)
+
+aux <- sb15.old %>% filter(Idade %in% mx.vgcot.m$age, GEN == "Masculino") %>% pull(mx)
+t_sb15.m.old <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.m$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp,
+               ix.alt = aux,
+               alpha_w = 0.4)
+
+t_mt21.m <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.m$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vgcot$des.mt21$qx_dez),
+               alpha_w = 0.4)
+
+t_sb21.m <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.m$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vgcot$des.sb21$qx_dez),
+               alpha_w = 0.4)
+
+t_at.m <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.m$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - at.m.vgcot$qx_dez),
+               alpha_w = 0.4)
+
+t_cso.m <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.m$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.m$age & agg.vg.cot$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - cso.m.vgcot$qx_dez),
+               alpha_w = 0.4)
+
+
+
+t_mt15.f <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.f$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vgcot$des.mt15$qx_dez),
+               alpha_w = 0.4)
+
+t_sb15.f <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.f$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vgcot$des.sb15$qx_dez),
+               alpha_w = 0.4)
+
+aux <- sb15.old %>% filter(Idade %in% mx.vgcot.f$age, GEN == "Feminino") %>% pull(mx)
+t_sb15.f.old <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.f$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp,
+               ix.alt = aux,
+               alpha_w = 0.4)
+
+t_mt21.f <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.f$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vgcot$des.mt21$qx_dez),
+               alpha_w = 0.4)
+
+t_sb21.f <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.f$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vgcot$des.sb21$qx_dez),
+               alpha_w = 0.4)
+
+t_at.f <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.f$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - at.f.vgcot$qx_dez),
+               alpha_w = 0.4)
+
+t_cso.f <- opt_chisq_test(
+  Dx = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgcot.f$qx.fitted),
+               Ex = agg.vg.cot[agg.vg.cot$pesos %in% mx.vgcot.f$age & agg.vg.cot$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - cso.f.vgcot$qx_dez),
+               alpha_w = 0.4)
+
+
+res <- matrix(c("BR-EMSsb v.2015-m (2024)", t_sb15.m.old,
+                      paste("BR-EMSmt v.2015-m", br.m.vgcot$des.mt15$pc_dez), t_mt15.m,
+                      paste("BR-EMSsb v.2015-m", br.m.vgcot$des.sb15$pc_dez), t_sb15.m,
+                      paste("BR-EMSmt v.2021-m", br.m.vgcot$des.mt21$pc_dez), t_mt21.m,
+                      paste("BR-EMSsb v.2021-m", br.m.vgcot$des.sb21$pc_dez), t_sb21.m,
+                      paste("AT83 MALE (IAM)", at.m.vgcot$pc_dez), t_at.m,
+                      paste("CSO-80", cso.m.vgcot$pc_dez), t_cso.m,
+                      "BR-EMSsb v.2015-f (2024)", t_sb15.f.old,
+                      paste("BR-EMSmt v.2015-f", br.f.vgcot$des.mt15$pc_dez), t_mt15.f,
+                      paste("BR-EMSsb v.2015-f", br.f.vgcot$des.sb15$pc_dez), t_sb15.f,
+                      paste("BR-EMSmt v.2021-f", br.f.vgcot$des.mt21$pc_dez), t_mt21.f,
+                      paste("BR-EMSsb v.2021-f", br.f.vgcot$des.sb21$pc_dez), t_sb21.f,
+                      paste("AT83 FEMALE (IAM)", at.f.vgcot$pc_dez), t_at.f,
+                      paste("CSO-80", cso.f.vgcot$pc_dez), t_cso.f),
+                    nrow = 14, ncol = 4, byrow = T)
+
+colnames(res) <- c("Tábua Alternativa", "Estatística", "Erro tipo I", "Erro tipo II")
+
+res %>% as.data.frame() %>%
+  knitr::kable() %>%
+  kableExtra::row_spec(c(1:5,7,8:14), bold = T) %>%
+  kableExtra::row_spec(7, extra_css = "border-bottom: 1px solid") %>%
+  kableExtra::kable_styling()
+```
+
+#### VG prestamista MQC
+
+```{r}
+t_mt15.m <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.m$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vgpres$des.mt15$qx_dez),
+               alpha_w = 0.4)
+
+
+t_sb15.m <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.m$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vgpres$des.sb15$qx_dez),
+               alpha_w = 0.4)
+
+aux <- sb15.old %>% filter(Idade %in% mx.vgpres.m$age, GEN == "Masculino") %>% pull(mx)
+t_sb15.m.old <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.m$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp,
+               ix.alt = aux,
+               alpha_w = 0.4)
+
+t_mt21.m <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.m$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vgpres$des.mt21$qx_dez),
+               alpha_w = 0.4)
+
+t_sb21.m <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.m$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.vgpres$des.sb21$qx_dez),
+               alpha_w = 0.4)
+
+t_at.m <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.m$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - at.m.vgpres$qx_dez),
+               alpha_w = 0.4)
+
+t_cso.m <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.m$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.m$age & agg.vg.pres$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - cso.m.vgpres$qx_dez),
+               alpha_w = 0.4)
+
+
+
+t_mt15.f <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.f$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vgpres$des.mt15$qx_dez),
+               alpha_w = 0.4)
+
+t_sb15.f <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.f$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vgpres$des.sb15$qx_dez),
+               alpha_w = 0.4)
+
+aux <- sb15.old %>% filter(Idade %in% mx.vgpres.f$age, GEN == "Feminino") %>% pull(mx)
+t_sb15.f.old <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.f$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp,
+               ix.alt = aux,
+               alpha_w = 0.4)
+
+t_mt21.f <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.f$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vgpres$des.mt21$qx_dez),
+               alpha_w = 0.4)
+
+t_sb21.f <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.f$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.vgpres$des.sb21$qx_dez),
+               alpha_w = 0.4)
+
+t_at.f <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.f$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - at.f.vgpres$qx_dez),
+               alpha_w = 0.4)
+
+t_cso.f <- opt_chisq_test(
+  Dx = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.vgpres.f$qx.fitted),
+               Ex = agg.vg.pres[agg.vg.pres$idade %in% mx.vgpres.f$age & agg.vg.pres$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - cso.f.vgpres$qx_dez),
+               alpha_w = 0.4)
+
+
+res <- matrix(c("BR-EMSsb v.2015-m (2024)", t_sb15.m.old,
+                      paste("BR-EMSmt v.2015-m", br.m.vgpres$des.mt15$pc_dez), t_mt15.m,
+                      paste("BR-EMSsb v.2015-m", br.m.vgpres$des.sb15$pc_dez), t_sb15.m,
+                      paste("BR-EMSmt v.2021-m", br.m.vgpres$des.mt21$pc_dez), t_mt21.m,
+                      paste("BR-EMSsb v.2021-m", br.m.vgpres$des.sb21$pc_dez), t_sb21.m,
+                      paste("AT83 MALE (IAM)", at.m.vgpres$pc_dez), t_at.m,
+                      paste("CSO-80", cso.m.vgpres$pc_dez), t_cso.m,
+                      "BR-EMSsb v.2015-f (2024)", t_sb15.f.old,
+                      paste("BR-EMSmt v.2015-f", br.f.vgpres$des.mt15$pc_dez), t_mt15.f,
+                      paste("BR-EMSsb v.2015-f", br.f.vgpres$des.sb15$pc_dez), t_sb15.f,
+                      paste("BR-EMSmt v.2021-f", br.f.vgpres$des.mt21$pc_dez), t_mt21.f,
+                      paste("BR-EMSsb v.2021-f", br.f.vgpres$des.sb21$pc_dez), t_sb21.f,
+                      paste("AT83 FEMALE (IAM)", at.f.vgpres$pc_dez), t_at.f,
+                      paste("CSO-80", cso.f.vgpres$pc_dez), t_cso.f),
+                    nrow = 14, ncol = 4, byrow = T)
+
+colnames(res) <- c("Tábua Alternativa", "Estatística", "Erro tipo I", "Erro tipo II")
+
+res %>% as.data.frame() %>%
+  knitr::kable() %>%
+  kableExtra::row_spec(c(10:14), bold = T) %>%
+  kableExtra::row_spec(7, extra_css = "border-bottom: 1px solid") %>%
+  kableExtra::kable_styling()
+```
+
+#### MQC
+
+```{r}
+t_mt15.m <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.uniq.m$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.uniq$des.mt15$qx_dez),
+               alpha_w = 0.4)
+
+
+t_sb15.m <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.uniq.m$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.uniq$des.sb15$qx_dez),
+               alpha_w = 0.4)
+
+aux <- sb15.old %>% filter(Idade %in% mx.uniq.m$age, GEN == "Masculino") %>% pull(mx)
+t_sb15.m.old <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.uniq.m$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp,
+               ix.alt = aux,
+               alpha_w = 0.4)
+
+t_mt21.m <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.uniq.m$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.uniq$des.mt21$qx_dez),
+               alpha_w = 0.4)
+
+t_sb21.m <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.uniq.m$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - br.m.uniq$des.sb21$qx_dez),
+               alpha_w = 0.4)
+
+t_at.m <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.uniq.m$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - at.m.uniq$qx_dez),
+               alpha_w = 0.4)
+
+t_cso.m <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$obt,
+               ix.fit = -log(1 - mx.uniq.m$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.m$age & agg$sexo.aux == "Masculino",]$exp,
+               ix.alt = -log(1 - cso.m.uniq$qx_dez),
+               alpha_w = 0.4)
+
+
+
+t_mt15.f <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.uniq.f$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.uniq$des.mt15$qx_dez),
+               alpha_w = 0.4)
+
+t_sb15.f <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.uniq.f$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.uniq$des.sb15$qx_dez),
+               alpha_w = 0.4)
+
+aux <- sb15.old %>% filter(Idade %in% mx.uniq.f$age, GEN == "Feminino") %>% pull(mx)
+t_sb15.f.old <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.uniq.f$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp,
+               ix.alt = aux,
+               alpha_w = 0.4)
+
+t_mt21.f <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.uniq.f$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.uniq$des.mt21$qx_dez),
+               alpha_w = 0.4)
+
+t_sb21.f <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.uniq.f$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - br.f.uniq$des.sb21$qx_dez),
+               alpha_w = 0.4)
+
+t_at.f <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.uniq.f$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - at.f.uniq$qx_dez),
+               alpha_w = 0.4)
+
+t_cso.f <- opt_chisq_test(
+  Dx = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$obt,
+               ix.fit = -log(1 - mx.uniq.f$qx.fitted),
+               Ex = agg[agg$idade %in% mx.uniq.f$age & agg$sexo.aux == "Feminino",]$exp,
+               ix.alt = -log(1 - cso.f.uniq$qx_dez),
+               alpha_w = 0.4)
+
+
+res <- matrix(c("BR-EMSsb v.2015-m (2024)", t_sb15.m.old,
+                      paste("BR-EMSmt v.2015-m", br.m.uniq$des.mt15$pc_dez), t_mt15.m,
+                      paste("BR-EMSsb v.2015-m", br.m.uniq$des.sb15$pc_dez), t_sb15.m,
+                      paste("BR-EMSmt v.2021-m", br.m.uniq$des.mt21$pc_dez), t_mt21.m,
+                      paste("BR-EMSsb v.2021-m", br.m.uniq$des.sb21$pc_dez), t_sb21.m,
+                      paste("AT83 MALE (IAM)", at.m.uniq$pc_dez), t_at.m,
+                      paste("CSO-80", cso.m.uniq$pc_dez), t_cso.m,
+                      "BR-EMSsb v.2015-f (2024)", t_sb15.f.old,
+                      paste("BR-EMSmt v.2015-f", br.f.uniq$des.mt15$pc_dez), t_mt15.f,
+                      paste("BR-EMSsb v.2015-f", br.f.uniq$des.sb15$pc_dez), t_sb15.f,
+                      paste("BR-EMSmt v.2021-f", br.f.uniq$des.mt21$pc_dez), t_mt21.f,
+                      paste("BR-EMSsb v.2021-f", br.f.uniq$des.sb21$pc_dez), t_sb21.f,
+                      paste("AT83 FEMALE (IAM)", at.f.uniq$pc_dez), t_at.f,
+                      paste("CSO-80", cso.f.uniq$pc_dez), t_cso.f),
+                    nrow = 14, ncol = 4, byrow = T)
+
+colnames(res) <- c("Tábua Alternativa", "Estatística", "Erro tipo I", "Erro tipo II")
+
+res %>% as.data.frame() %>%
+  knitr::kable() %>%
+  kableExtra::row_spec(c(7:8,10:14), bold = T) %>%
+  kableExtra::row_spec(7, extra_css = "border-bottom: 1px solid") %>%
+  kableExtra::kable_styling()
+```
+:::

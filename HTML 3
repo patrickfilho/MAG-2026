@@ -1,0 +1,3134 @@
+---
+title: "Resultados dos Modelos — Base V4"
+subtitle: "NB tradicional vs. SP-NB Rook vs. SP-NB Queen"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+date: "`r Sys.Date()`"
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+# ============================================================
+# 0. CONFIGURACOES
+# ============================================================
+
+options(
+  scipen = 999,
+  dplyr.summarise.inform = FALSE
+)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 10,
+  fig.height = 5.5
+)
+
+pacotes <- c(
+  "dplyr",
+  "tidyr",
+  "readr",
+  "tibble",
+  "ggplot2",
+  "knitr",
+  "scales",
+  "MASS"
+)
+
+instalar <- pacotes[
+  !pacotes %in% rownames(installed.packages())
+]
+
+if (length(instalar) > 0) {
+  install.packages(instalar)
+}
+
+# MASS nao e carregado com library()
+# para evitar conflito com dplyr::select()
+
+library(dplyr)
+library(tidyr)
+library(readr)
+library(tibble)
+library(ggplot2)
+library(knitr)
+library(scales)
+
+TRAIN_END_YEAR <- 2020
+
+MAX_ITER_EM <- 400
+
+TOL_EM <- 1e-6
+
+EPS <- 1e-12
+```
+
+# 1. Objetivo
+
+A Base V4 foi criada especificamente para testar se o modelo espaço-temporal consegue identificar uma dependência espacial conhecida.
+
+A variável resposta é:
+
+\[
+Y_{g,t}
+=
+\text{número de sinistros no grid }g\text{ no mês }t.
+\]
+
+A exposição é:
+
+\[
+E_{g,t}
+=
+\text{número de casas seguradas no grid }g.
+\]
+
+Serão comparados três modelos.
+
+### Negative Binomial tradicional
+
+\[
+\lambda_{g,t}
+=
+E_{g,t}
+\exp(\beta^\top X_{g,t}).
+\]
+
+### SP-NB Rook
+
+\[
+\lambda_{g,t}
+=
+E_{g,t}
+\left[
+\exp(\beta^\top X_{g,t})
++
+\psi_g
+(A_R\bar Y_{t-1})_g
+\right].
+\]
+
+### SP-NB Queen
+
+\[
+\lambda_{g,t}
+=
+E_{g,t}
+\left[
+\exp(\beta^\top X_{g,t})
++
+\psi_g
+(A_Q\bar Y_{t-1})_g
+\right].
+\]
+
+A base foi gerada utilizando **Queen como processo espacial verdadeiro**.
+
+Portanto, este exercício permite avaliar se o procedimento de estimação consegue recuperar a estrutura que efetivamente gerou os dados.
+
+# 2. Ler a Base V4
+
+```{r leitura}
+# ============================================================
+# 2. LEITURA
+# ============================================================
+
+ARQUIVO_BASE <- "base_tratada_v4.csv"
+
+base <- readr::read_csv(
+  ARQUIVO_BASE,
+  show_col_types = FALSE
+)
+
+base <- base %>%
+
+  dplyr::mutate(
+
+    id_celula =
+      as.character(id_celula),
+
+    ano =
+      as.integer(ano),
+
+    mes =
+      as.integer(mes),
+
+    data_mes =
+      as.Date(data_mes),
+
+    exposicao =
+      as.numeric(exposicao),
+
+    sinistros =
+      as.integer(sinistros),
+
+    y_bar =
+      as.integer(y_bar)
+
+  )
+
+
+cat(
+  "Numero de observacoes:",
+  nrow(base),
+  "\n"
+)
+
+cat(
+  "Numero de grids:",
+  dplyr::n_distinct(base$id_celula),
+  "\n"
+)
+
+cat(
+  "Numero de meses:",
+  dplyr::n_distinct(base$data_mes),
+  "\n"
+)
+
+cat(
+  "Total de sinistros:",
+  sum(base$sinistros),
+  "\n"
+)
+```
+
+# 3. A base agora tem exatamente uma linha por grid-mês
+
+```{r estrutura}
+# ============================================================
+# 3. ESTRUTURA
+# ============================================================
+
+checagem <- base %>%
+
+  dplyr::count(
+    id_celula,
+    ano,
+    mes
+  )
+
+
+cat(
+  "Maior numero de linhas para um mesmo grid-mes:",
+  max(checagem$n),
+  "\n"
+)
+
+
+stopifnot(
+  max(checagem$n) == 1
+)
+
+
+cat(
+  "Numero esperado de linhas:",
+  25 * 25 * 12,
+  "\n"
+)
+
+cat(
+  "Numero observado:",
+  nrow(base),
+  "\n"
+)
+```
+
+# 4. Verificar se o sinal espacial gerado é material
+
+Antes de comparar modelos, precisamos confirmar que o processo gerador realmente possui componente espacial relevante.
+
+```{r spatial-share}
+# ============================================================
+# 4. IMPORTANCIA REAL DO COMPONENTE ESPACIAL
+# ============================================================
+
+ativos <- base %>%
+
+  dplyr::filter(
+    spatial_lag_queen_true > 0
+  )
+
+
+resumo_share <- tibble::tibble(
+
+  Indicador =
+    c(
+      "Grid-meses com spatial lag ativo",
+      "% de grid-meses ativos",
+      "Share espacial medio quando ativo",
+      "Share espacial mediano quando ativo",
+      "Share espacial P25",
+      "Share espacial P75"
+    ),
+
+  Valor =
+    c(
+
+      nrow(ativos),
+
+      100 *
+        nrow(ativos) /
+        nrow(base),
+
+      mean(
+        ativos$share_spatial_true
+      ),
+
+      median(
+        ativos$share_spatial_true
+      ),
+
+      quantile(
+        ativos$share_spatial_true,
+        0.25
+      ),
+
+      quantile(
+        ativos$share_spatial_true,
+        0.75
+      )
+
+    )
+
+)
+
+
+knitr::kable(
+
+  resumo_share,
+
+  digits = 4,
+
+  caption =
+    "Importância do componente espacial no processo gerador"
+
+)
+```
+
+```{r spatial-share-hist}
+ggplot(
+
+  ativos,
+
+  aes(
+    x = share_spatial_true
+  )
+
+) +
+
+  geom_histogram(
+    bins = 30
+  ) +
+
+  scale_x_continuous(
+    labels = scales::percent
+  ) +
+
+  labs(
+
+    title =
+      "Participação do componente espacial quando ativo",
+
+    x =
+      "% da taxa total explicado pelo componente espacial",
+
+    y =
+      "Número de grid-meses"
+
+  ) +
+
+  theme_minimal()
+```
+
+# 5. Preparar as matrizes Rook e Queen
+
+```{r matrizes}
+# ============================================================
+# 5. MATRIZES
+# ============================================================
+
+grids <- base %>%
+
+  dplyr::distinct(
+    id_celula,
+    linha,
+    coluna
+  ) %>%
+
+  dplyr::arrange(
+    linha,
+    coluna
+  )
+
+
+grid_order <-
+  grids$id_celula
+
+
+G <-
+  nrow(grids)
+
+
+A_rook <- matrix(
+  0,
+  G,
+  G
+)
+
+
+A_queen <- matrix(
+  0,
+  G,
+  G
+)
+
+
+for (i in seq_len(G)) {
+
+  for (j in seq_len(G)) {
+
+    if (i != j) {
+
+
+      dl <-
+        abs(
+          grids$linha[i] -
+            grids$linha[j]
+        )
+
+
+      dc <-
+        abs(
+          grids$coluna[i] -
+            grids$coluna[j]
+        )
+
+
+      # ROOK
+
+      if (
+        dl + dc == 1
+      ) {
+
+        A_rook[i, j] <- 1
+
+      }
+
+
+      # QUEEN
+
+      if (
+        dl <= 1 &&
+        dc <= 1
+      ) {
+
+        A_queen[i, j] <- 1
+
+      }
+
+    }
+
+  }
+
+}
+
+
+rownames(A_rook) <- grid_order
+colnames(A_rook) <- grid_order
+
+rownames(A_queen) <- grid_order
+colnames(A_queen) <- grid_order
+
+
+cat(
+  "Pares Rook:",
+  sum(A_rook) / 2,
+  "\n"
+)
+
+cat(
+  "Pares Queen:",
+  sum(A_queen) / 2,
+  "\n"
+)
+```
+
+# 6. Recalcular os spatial lags a partir de \(Y_{bar}\)
+
+```{r spatial-lag}
+# ============================================================
+# 6. A * Y_BAR(t-1)
+# ============================================================
+
+calcular_spatial_lag <- function(
+    dados,
+    A,
+    grid_order
+) {
+
+
+  resultado <- dados %>%
+
+    dplyr::arrange(
+      data_mes,
+      match(
+        id_celula,
+        grid_order
+      )
+    )
+
+
+  resultado$spatial_lag_estimacao <- 0
+
+
+  meses <- sort(
+    unique(
+      resultado$data_mes
+    )
+  )
+
+
+  for (tt in 2:length(meses)) {
+
+
+    mes_anterior <-
+      meses[
+        tt - 1
+      ]
+
+
+    mes_atual <-
+      meses[
+        tt
+      ]
+
+
+    anterior <- resultado %>%
+
+      dplyr::filter(
+        data_mes ==
+          mes_anterior
+      )
+
+
+    vetor_ybar <- rep(
+      0,
+      length(grid_order)
+    )
+
+
+    names(vetor_ybar) <-
+      grid_order
+
+
+    vetor_ybar[
+      anterior$id_celula
+    ] <-
+      anterior$y_bar
+
+
+    S <-
+      as.numeric(
+        A %*%
+          vetor_ybar
+      )
+
+
+    names(S) <-
+      grid_order
+
+
+    idx <-
+      which(
+        resultado$data_mes ==
+          mes_atual
+      )
+
+
+    resultado$spatial_lag_estimacao[
+      idx
+    ] <-
+
+      S[
+        resultado$id_celula[
+          idx
+        ]
+      ]
+
+  }
+
+
+  resultado %>%
+
+    dplyr::select(
+
+      id_celula,
+      ano,
+      mes,
+
+      spatial_lag_estimacao
+
+    )
+
+}
+
+
+lag_rook <- calcular_spatial_lag(
+
+  base,
+
+  A_rook,
+
+  grid_order
+
+) %>%
+
+  dplyr::rename(
+
+    spatial_lag_rook_modelo =
+      spatial_lag_estimacao
+
+  )
+
+
+lag_queen <- calcular_spatial_lag(
+
+  base,
+
+  A_queen,
+
+  grid_order
+
+) %>%
+
+  dplyr::rename(
+
+    spatial_lag_queen_modelo =
+      spatial_lag_estimacao
+
+  )
+
+
+base <- base %>%
+
+  dplyr::left_join(
+
+    lag_rook,
+
+    by =
+      c(
+        "id_celula",
+        "ano",
+        "mes"
+      )
+
+  ) %>%
+
+  dplyr::left_join(
+
+    lag_queen,
+
+    by =
+      c(
+        "id_celula",
+        "ano",
+        "mes"
+      )
+
+  )
+```
+
+# 7. Verificar se recuperamos corretamente o spatial lag Queen
+
+Como a V4 já contém o spatial lag verdadeiro utilizado na simulação, podemos validar diretamente a construção.
+
+```{r check-spatial}
+comparacao_lag <- base %>%
+
+  dplyr::summarise(
+
+    diferenca_maxima =
+
+      max(
+
+        abs(
+
+          spatial_lag_queen_true -
+            spatial_lag_queen_modelo
+
+        )
+
+      ),
+
+    correlacao =
+
+      cor(
+
+        spatial_lag_queen_true,
+
+        spatial_lag_queen_modelo
+
+      )
+
+  )
+
+
+knitr::kable(
+
+  comparacao_lag,
+
+  digits = 6,
+
+  caption =
+    "Validação do spatial lag Queen"
+
+)
+```
+
+# 8. Treino e teste
+
+```{r train-test}
+# ============================================================
+# 8. TREINO / TESTE
+# ============================================================
+
+base <- base %>%
+
+  dplyr::mutate(
+
+    amostra =
+      if_else(
+        ano <= TRAIN_END_YEAR,
+        "Treino",
+        "Teste"
+      )
+
+  )
+
+
+treino <- base %>%
+
+  dplyr::filter(
+    amostra == "Treino"
+  )
+
+
+teste <- base %>%
+
+  dplyr::filter(
+    amostra == "Teste"
+  )
+
+
+cat(
+  "Treino:",
+  nrow(treino),
+  "observacoes\n"
+)
+
+cat(
+  "Teste:",
+  nrow(teste),
+  "observacoes\n"
+)
+
+cat(
+  "Sinistros treino:",
+  sum(treino$sinistros),
+  "\n"
+)
+
+cat(
+  "Sinistros teste:",
+  sum(teste$sinistros),
+  "\n"
+)
+```
+
+# 9. Matriz de covariáveis \(X\)
+
+As categorias de referência da composição da carteira são:
+
+- 1 piso;
+- qualidade boa;
+- idade 0–10.
+
+```{r X}
+# ============================================================
+# 9. X
+# ============================================================
+
+criar_X <- function(
+    dados
+) {
+
+
+  cbind(
+
+    Intercepto =
+      1,
+
+
+    # Clima
+
+    z_prec_mensal =
+      dados$z_prec_mensal,
+
+    z_prec_max =
+      dados$z_prec_max,
+
+    z_dias_extremos =
+      dados$z_dias_extremos,
+
+    z_prec_lag1 =
+      dados$z_prec_lag1,
+
+
+    # Carteira
+
+    z_pct_pisos_2 =
+      dados$z_pct_pisos_2,
+
+    z_pct_pisos_3mais =
+      dados$z_pct_pisos_3mais,
+
+    z_pct_qualidade_media =
+      dados$z_pct_qualidade_media,
+
+    z_pct_qualidade_baixa =
+      dados$z_pct_qualidade_baixa,
+
+    z_pct_idade_11_20 =
+      dados$z_pct_idade_11_20,
+
+    z_pct_idade_21_30 =
+      dados$z_pct_idade_21_30,
+
+    z_pct_idade_30mais =
+      dados$z_pct_idade_30mais
+
+  )
+
+}
+
+
+X_train <-
+  criar_X(
+    treino
+  )
+
+
+X_test <-
+  criar_X(
+    teste
+  )
+
+
+Y_train <-
+  treino$sinistros
+
+
+Y_test <-
+  teste$sinistros
+
+
+E_train <-
+  treino$exposicao
+
+
+E_test <-
+  teste$exposicao
+
+
+S_rook_train <-
+  treino$spatial_lag_rook_modelo
+
+
+S_rook_test <-
+  teste$spatial_lag_rook_modelo
+
+
+S_queen_train <-
+  treino$spatial_lag_queen_modelo
+
+
+S_queen_test <-
+  teste$spatial_lag_queen_modelo
+
+
+grid_idx_train <-
+  match(
+    treino$id_celula,
+    grid_order
+  )
+
+
+grid_idx_test <-
+  match(
+    teste$id_celula,
+    grid_order
+  )
+```
+
+# 10. Modelo 1 — Negative Binomial tradicional
+
+```{r NB}
+# ============================================================
+# 10. NB
+# ============================================================
+
+fit_nb <- MASS::glm.nb(
+
+  sinistros ~
+
+    z_prec_mensal +
+    z_prec_max +
+    z_dias_extremos +
+    z_prec_lag1 +
+
+    z_pct_pisos_2 +
+    z_pct_pisos_3mais +
+
+    z_pct_qualidade_media +
+    z_pct_qualidade_baixa +
+
+    z_pct_idade_11_20 +
+    z_pct_idade_21_30 +
+    z_pct_idade_30mais +
+
+    offset(
+      log(exposicao)
+    ),
+
+  data =
+    treino,
+
+  link =
+    log
+
+)
+
+
+phi_nb <-
+  fit_nb$theta
+
+
+mu_nb_train <-
+  as.numeric(
+
+    predict(
+      fit_nb,
+      newdata = treino,
+      type = "response"
+    )
+
+  )
+
+
+mu_nb_test <-
+  as.numeric(
+
+    predict(
+      fit_nb,
+      newdata = teste,
+      type = "response"
+    )
+
+  )
+
+
+summary(
+  fit_nb
+)
+```
+
+# 11. Funções do SP-NB
+
+```{r funcoes}
+# ============================================================
+# 11. FUNCOES
+# ============================================================
+
+calcular_mu_spnb <- function(
+    beta,
+    gamma_psi,
+    X,
+    E,
+    S,
+    grid_idx
+) {
+
+
+  eta <-
+    as.numeric(
+      X %*%
+        beta
+    )
+
+
+  taxa_base <-
+    exp(
+      pmin(
+        eta,
+        30
+      )
+    )
+
+
+  psi <-
+    exp(
+      gamma_psi
+    )
+
+
+  taxa_spatial <-
+
+    psi[
+      grid_idx
+    ] *
+    S
+
+
+  mu <-
+
+    E *
+
+    (
+      taxa_base +
+        taxa_spatial
+    )
+
+
+  pmax(
+    mu,
+    EPS
+  )
+}
+
+
+loglik_nb <- function(
+    y,
+    mu,
+    phi
+) {
+
+
+  sum(
+
+    dnbinom(
+
+      y,
+
+      mu =
+        mu,
+
+      size =
+        phi,
+
+      log =
+        TRUE
+
+    )
+
+  )
+
+}
+```
+
+# 12. Algoritmo EM
+
+```{r EM}
+# ============================================================
+# 12. EM
+# ============================================================
+
+fit_spnb_em <- function(
+    y,
+    X,
+    E,
+    S,
+    grid_idx,
+    n_grids,
+    beta_init,
+    phi_init,
+    max_iter = 400,
+    tol = 1e-6,
+    verbose = TRUE
+) {
+
+
+  p <-
+    ncol(X)
+
+
+  beta <-
+    beta_init
+
+
+  phi <-
+    max(
+      phi_init,
+      0.01
+    )
+
+
+  gamma_psi <- rep(
+
+    log(
+      1e-4
+    ),
+
+    n_grids
+
+  )
+
+
+  historico <-
+    tibble::tibble()
+
+
+  ll_anterior <-
+    -Inf
+
+
+  convergiu <-
+    FALSE
+
+
+  for (
+    iter in seq_len(
+      max_iter
+    )
+  ) {
+
+
+    mu <-
+      calcular_mu_spnb(
+
+        beta =
+          beta,
+
+        gamma_psi =
+          gamma_psi,
+
+        X =
+          X,
+
+        E =
+          E,
+
+        S =
+          S,
+
+        grid_idx =
+          grid_idx
+
+      )
+
+
+    # ========================================================
+    # E-STEP
+    # ========================================================
+
+    w1 <-
+
+      (
+        phi +
+          y
+      ) /
+
+      (
+        phi +
+          mu
+      )
+
+
+    w2 <-
+
+      digamma(
+        phi +
+          y
+      ) -
+
+      log(
+        phi +
+          mu
+      )
+
+
+    # ========================================================
+    # M-STEP: beta + psi
+    # ========================================================
+
+    objetivo_media <- function(
+        par
+    ) {
+
+
+      beta_novo <-
+        par[
+          1:p
+        ]
+
+
+      gamma_novo <-
+        par[
+          (p + 1):
+            length(par)
+        ]
+
+
+      mu_novo <-
+
+        calcular_mu_spnb(
+
+          beta =
+            beta_novo,
+
+          gamma_psi =
+            gamma_novo,
+
+          X =
+            X,
+
+          E =
+            E,
+
+          S =
+            S,
+
+          grid_idx =
+            grid_idx
+
+        )
+
+
+      Q <-
+
+        sum(
+
+          y *
+            log(
+              mu_novo
+            ) -
+
+            w1 *
+            mu_novo
+
+        )
+
+
+      -Q
+
+    }
+
+
+    parametros_atuais <-
+
+      c(
+        beta,
+        gamma_psi
+      )
+
+
+    lower <-
+
+      c(
+
+        rep(
+          -20,
+          p
+        ),
+
+        rep(
+          log(1e-10),
+          n_grids
+        )
+
+      )
+
+
+    upper <-
+
+      c(
+
+        rep(
+          20,
+          p
+        ),
+
+        rep(
+          log(1),
+          n_grids
+        )
+
+      )
+
+
+    opt_media <-
+
+      optim(
+
+        par =
+          parametros_atuais,
+
+        fn =
+          objetivo_media,
+
+        method =
+          "L-BFGS-B",
+
+        lower =
+          lower,
+
+        upper =
+          upper,
+
+        control =
+          list(
+            maxit = 300
+          )
+
+      )
+
+
+    beta <-
+
+      opt_media$par[
+        1:p
+      ]
+
+
+    gamma_psi <-
+
+      opt_media$par[
+        (p + 1):
+          length(
+            opt_media$par
+          )
+      ]
+
+
+    # ========================================================
+    # M-STEP: phi
+    # ========================================================
+
+    objetivo_phi <- function(
+        log_phi
+    ) {
+
+
+      phi_novo <-
+        exp(
+          log_phi
+        )
+
+
+      Q_phi <-
+
+        length(y) *
+
+        (
+          phi_novo *
+            log(
+              phi_novo
+            ) -
+
+            lgamma(
+              phi_novo
+            )
+        ) +
+
+        (
+          phi_novo -
+            1
+        ) *
+        sum(
+          w2
+        ) -
+
+        phi_novo *
+        sum(
+          w1
+        )
+
+
+      -Q_phi
+
+    }
+
+
+    opt_phi <-
+
+      optimize(
+
+        objetivo_phi,
+
+        interval =
+          c(
+            log(1e-4),
+            log(1e5)
+          )
+
+      )
+
+
+    phi <-
+      exp(
+        opt_phi$minimum
+      )
+
+
+    # ========================================================
+    # Likelihood marginal
+    # ========================================================
+
+    mu <-
+
+      calcular_mu_spnb(
+
+        beta =
+          beta,
+
+        gamma_psi =
+          gamma_psi,
+
+        X =
+          X,
+
+        E =
+          E,
+
+        S =
+          S,
+
+        grid_idx =
+          grid_idx
+
+      )
+
+
+    ll <-
+
+      loglik_nb(
+        y,
+        mu,
+        phi
+      )
+
+
+    delta_ll <-
+
+      abs(
+        ll -
+          ll_anterior
+      )
+
+
+    historico <-
+
+      dplyr::bind_rows(
+
+        historico,
+
+        tibble::tibble(
+
+          iteracao =
+            iter,
+
+          logLik =
+            ll,
+
+          delta_logLik =
+            delta_ll,
+
+          phi =
+            phi
+
+        )
+
+      )
+
+
+    if (
+
+      verbose &&
+      (
+        iter == 1 ||
+        iter %% 10 == 0
+      )
+
+    ) {
+
+
+      cat(
+
+        "Iteracao",
+        iter,
+
+        "| logLik",
+        round(
+          ll,
+          3
+        ),
+
+        "| delta",
+        round(
+          delta_ll,
+          8
+        ),
+
+        "| phi",
+        round(
+          phi,
+          4
+        ),
+
+        "\n"
+
+      )
+
+    }
+
+
+    if (
+
+      iter > 1 &&
+      delta_ll <
+        tol
+
+    ) {
+
+
+      convergiu <-
+        TRUE
+
+      break
+
+    }
+
+
+    ll_anterior <-
+      ll
+
+  }
+
+
+  list(
+
+    beta =
+      beta,
+
+    gamma_psi =
+      gamma_psi,
+
+    psi =
+      exp(
+        gamma_psi
+      ),
+
+    phi =
+      phi,
+
+    mu =
+      mu,
+
+    logLik =
+      ll,
+
+    historico =
+      historico,
+
+    iteracoes =
+      iter,
+
+    convergiu =
+      convergiu
+
+  )
+
+}
+```
+
+# 13. Inicialização pelo NB
+
+```{r init}
+# ============================================================
+# 13. INIT
+# ============================================================
+
+coef_nb <-
+  coef(
+    fit_nb
+  )
+
+
+beta_init <- c(
+
+  coef_nb["(Intercept)"],
+
+  coef_nb["z_prec_mensal"],
+
+  coef_nb["z_prec_max"],
+
+  coef_nb["z_dias_extremos"],
+
+  coef_nb["z_prec_lag1"],
+
+  coef_nb["z_pct_pisos_2"],
+
+  coef_nb["z_pct_pisos_3mais"],
+
+  coef_nb["z_pct_qualidade_media"],
+
+  coef_nb["z_pct_qualidade_baixa"],
+
+  coef_nb["z_pct_idade_11_20"],
+
+  coef_nb["z_pct_idade_21_30"],
+
+  coef_nb["z_pct_idade_30mais"]
+
+)
+
+
+beta_init <-
+  as.numeric(
+    beta_init
+  )
+
+
+phi_init <-
+  fit_nb$theta
+```
+
+# 14. Estimar SP-NB Rook
+
+```{r rook-model, cache=TRUE}
+fit_rook <- fit_spnb_em(
+
+  y =
+    Y_train,
+
+  X =
+    X_train,
+
+  E =
+    E_train,
+
+  S =
+    S_rook_train,
+
+  grid_idx =
+    grid_idx_train,
+
+  n_grids =
+    G,
+
+  beta_init =
+    beta_init,
+
+  phi_init =
+    phi_init,
+
+  max_iter =
+    MAX_ITER_EM,
+
+  tol =
+    TOL_EM
+
+)
+```
+
+# 15. Estimar SP-NB Queen
+
+```{r queen-model, cache=TRUE}
+fit_queen <- fit_spnb_em(
+
+  y =
+    Y_train,
+
+  X =
+    X_train,
+
+  E =
+    E_train,
+
+  S =
+    S_queen_train,
+
+  grid_idx =
+    grid_idx_train,
+
+  n_grids =
+    G,
+
+  beta_init =
+    beta_init,
+
+  phi_init =
+    phi_init,
+
+  max_iter =
+    MAX_ITER_EM,
+
+  tol =
+    TOL_EM
+
+)
+```
+
+# 16. Predições
+
+```{r predictions}
+# ============================================================
+# 16. PREDICOES
+# ============================================================
+
+mu_rook_train <-
+  calcular_mu_spnb(
+
+    fit_rook$beta,
+    fit_rook$gamma_psi,
+
+    X_train,
+    E_train,
+    S_rook_train,
+    grid_idx_train
+
+  )
+
+
+mu_rook_test <-
+  calcular_mu_spnb(
+
+    fit_rook$beta,
+    fit_rook$gamma_psi,
+
+    X_test,
+    E_test,
+    S_rook_test,
+    grid_idx_test
+
+  )
+
+
+mu_queen_train <-
+  calcular_mu_spnb(
+
+    fit_queen$beta,
+    fit_queen$gamma_psi,
+
+    X_train,
+    E_train,
+    S_queen_train,
+    grid_idx_train
+
+  )
+
+
+mu_queen_test <-
+  calcular_mu_spnb(
+
+    fit_queen$beta,
+    fit_queen$gamma_psi,
+
+    X_test,
+    E_test,
+    S_queen_test,
+    grid_idx_test
+
+  )
+```
+
+# 17. Convergência
+
+```{r convergence}
+historico <- dplyr::bind_rows(
+
+  fit_rook$historico %>%
+
+    dplyr::mutate(
+      Modelo = "SP-NB Rook"
+    ),
+
+  fit_queen$historico %>%
+
+    dplyr::mutate(
+      Modelo = "SP-NB Queen"
+    )
+
+)
+
+
+ggplot(
+
+  historico,
+
+  aes(
+
+    x = iteracao,
+
+    y = logLik,
+
+    linetype = Modelo
+
+  )
+
+) +
+
+  geom_line(
+    linewidth = 0.8
+  ) +
+
+  labs(
+
+    title =
+      "Convergência dos modelos espaço-temporais",
+
+    x =
+      "Iteração",
+
+    y =
+      "Log-likelihood",
+
+    linetype =
+      NULL
+
+  ) +
+
+  theme_minimal()
+```
+
+# 18. Métricas de comparação
+
+```{r metric-functions}
+# ============================================================
+# 18. METRICAS
+# ============================================================
+
+metricas_modelo <- function(
+    y,
+    mu,
+    phi,
+    k,
+    nome
+) {
+
+
+  ll <-
+    loglik_nb(
+      y,
+      mu,
+      phi
+    )
+
+
+  tibble::tibble(
+
+    Modelo =
+      nome,
+
+    N =
+      length(y),
+
+    Observado =
+      sum(y),
+
+    Previsto =
+      sum(mu),
+
+    Balance =
+      sum(mu) /
+      sum(y),
+
+    LogLik =
+      ll,
+
+    AIC =
+      -2 *
+      ll +
+      2 *
+      k,
+
+    BIC =
+      -2 *
+      ll +
+      log(
+        length(y)
+      ) *
+      k,
+
+    MAE =
+      mean(
+        abs(
+          y -
+            mu
+        )
+      ),
+
+    RMSE =
+      sqrt(
+
+        mean(
+
+          (
+            y -
+              mu
+          )^2
+
+        )
+
+      ),
+
+    LogScore =
+      mean(
+
+        dnbinom(
+
+          y,
+
+          mu =
+            mu,
+
+          size =
+            phi,
+
+          log =
+            TRUE
+
+        )
+
+      )
+
+  )
+
+}
+```
+
+# 19. Resultados no treino
+
+```{r train-results}
+P <-
+  ncol(
+    X_train
+  )
+
+
+K_NB <-
+  P +
+  1
+
+
+K_SP <-
+  P +
+  G +
+  1
+
+
+metricas_treino <- dplyr::bind_rows(
+
+  metricas_modelo(
+
+    Y_train,
+
+    mu_nb_train,
+
+    phi_nb,
+
+    K_NB,
+
+    "NB"
+
+  ),
+
+  metricas_modelo(
+
+    Y_train,
+
+    mu_rook_train,
+
+    fit_rook$phi,
+
+    K_SP,
+
+    "SP-NB Rook"
+
+  ),
+
+  metricas_modelo(
+
+    Y_train,
+
+    mu_queen_train,
+
+    fit_queen$phi,
+
+    K_SP,
+
+    "SP-NB Queen"
+
+  )
+
+)
+
+
+knitr::kable(
+
+  metricas_treino,
+
+  digits = 4,
+
+  caption =
+    "Desempenho no conjunto de treino"
+
+)
+```
+
+# 20. Resultados fora da amostra
+
+```{r test-results}
+metricas_teste <- dplyr::bind_rows(
+
+  metricas_modelo(
+
+    Y_test,
+
+    mu_nb_test,
+
+    phi_nb,
+
+    K_NB,
+
+    "NB"
+
+  ),
+
+  metricas_modelo(
+
+    Y_test,
+
+    mu_rook_test,
+
+    fit_rook$phi,
+
+    K_SP,
+
+    "SP-NB Rook"
+
+  ),
+
+  metricas_modelo(
+
+    Y_test,
+
+    mu_queen_test,
+
+    fit_queen$phi,
+
+    K_SP,
+
+    "SP-NB Queen"
+
+  )
+
+)
+
+
+knitr::kable(
+
+  metricas_teste %>%
+
+    dplyr::select(
+
+      Modelo,
+      Observado,
+      Previsto,
+      Balance,
+      MAE,
+      RMSE,
+      LogScore
+
+    ),
+
+  digits = 4,
+
+  caption =
+    "Desempenho fora da amostra"
+
+)
+```
+
+# 21. Quanto cada modelo melhora versus NB?
+
+```{r improvements}
+# ============================================================
+# 21. GANHO VERSUS NB
+# ============================================================
+
+rmse_nb <-
+  metricas_teste$RMSE[
+    metricas_teste$Modelo ==
+      "NB"
+  ]
+
+
+mae_nb <-
+  metricas_teste$MAE[
+    metricas_teste$Modelo ==
+      "NB"
+  ]
+
+
+comparacao_incremental <- metricas_teste %>%
+
+  dplyr::mutate(
+
+    Melhora_RMSE_vs_NB =
+      100 *
+      (
+        rmse_nb -
+          RMSE
+      ) /
+      rmse_nb,
+
+    Melhora_MAE_vs_NB =
+      100 *
+      (
+        mae_nb -
+          MAE
+      ) /
+      mae_nb
+
+  ) %>%
+
+  dplyr::select(
+
+    Modelo,
+
+    RMSE,
+    Melhora_RMSE_vs_NB,
+
+    MAE,
+    Melhora_MAE_vs_NB,
+
+    LogScore
+
+  )
+
+
+knitr::kable(
+
+  comparacao_incremental,
+
+  digits = 3,
+
+  caption =
+    "Ganho preditivo em relação ao NB"
+
+)
+```
+
+# 22. Coeficientes estimados
+
+```{r betas}
+tabela_beta <- tibble::tibble(
+
+  Variavel =
+    colnames(
+      X_train
+    ),
+
+  NB =
+    as.numeric(
+      coef(
+        fit_nb
+      )
+    ),
+
+  SP_NB_Rook =
+    fit_rook$beta,
+
+  SP_NB_Queen =
+    fit_queen$beta
+
+)
+
+
+knitr::kable(
+
+  tabela_beta,
+
+  digits = 5,
+
+  caption =
+    "Coeficientes estimados"
+
+)
+```
+
+# 23. Recuperação dos parâmetros verdadeiros
+
+```{r true-betas}
+# ============================================================
+# 23. TRUE BETA
+# ============================================================
+
+if (
+  file.exists(
+    "parametros_beta_true_v4.csv"
+  )
+) {
+
+
+  beta_true <- readr::read_csv(
+
+    "parametros_beta_true_v4.csv",
+
+    show_col_types =
+      FALSE
+
+  )
+
+
+  mapa <- c(
+
+    "intercepto" =
+      "Intercepto",
+
+    "z_prec_mensal" =
+      "z_prec_mensal",
+
+    "z_prec_max" =
+      "z_prec_max",
+
+    "z_dias_extremos" =
+      "z_dias_extremos",
+
+    "z_prec_lag1" =
+      "z_prec_lag1",
+
+    "z_pct_pisos_2" =
+      "z_pct_pisos_2",
+
+    "z_pct_pisos_3mais" =
+      "z_pct_pisos_3mais",
+
+    "z_pct_qualidade_media" =
+      "z_pct_qualidade_media",
+
+    "z_pct_qualidade_baixa" =
+      "z_pct_qualidade_baixa",
+
+    "z_pct_idade_11_20" =
+      "z_pct_idade_11_20",
+
+    "z_pct_idade_21_30" =
+      "z_pct_idade_21_30",
+
+    "z_pct_idade_30mais" =
+      "z_pct_idade_30mais"
+
+  )
+
+
+  beta_true <- beta_true %>%
+
+    dplyr::mutate(
+
+      Variavel =
+        unname(
+          mapa[
+            parametro
+          ]
+        )
+
+    )
+
+
+  tabela_beta_true <- tabela_beta %>%
+
+    dplyr::left_join(
+
+      beta_true %>%
+
+        dplyr::select(
+
+          Variavel,
+
+          Beta_true =
+            valor_true
+
+        ),
+
+      by =
+        "Variavel"
+
+    ) %>%
+
+    dplyr::relocate(
+
+      Beta_true,
+
+      .after =
+        Variavel
+
+    )
+
+
+  knitr::kable(
+
+    tabela_beta_true,
+
+    digits = 5,
+
+    caption =
+      "Beta verdadeiro versus estimativas"
+
+  )
+
+}
+```
+
+# 24. Erro na recuperação dos \(\beta\)
+
+```{r beta-error}
+if (
+  exists(
+    "tabela_beta_true"
+  )
+) {
+
+
+  erro_beta <- tabela_beta_true %>%
+
+    dplyr::mutate(
+
+      erro_NB =
+        abs(
+          NB -
+            Beta_true
+        ),
+
+      erro_Rook =
+        abs(
+          SP_NB_Rook -
+            Beta_true
+        ),
+
+      erro_Queen =
+        abs(
+          SP_NB_Queen -
+            Beta_true
+        )
+
+    )
+
+
+  resumo_erro_beta <- tibble::tibble(
+
+    Modelo =
+      c(
+        "NB",
+        "SP-NB Rook",
+        "SP-NB Queen"
+      ),
+
+    MAE_Beta =
+      c(
+
+        mean(
+          erro_beta$erro_NB
+        ),
+
+        mean(
+          erro_beta$erro_Rook
+        ),
+
+        mean(
+          erro_beta$erro_Queen
+        )
+
+      )
+
+  )
+
+
+  knitr::kable(
+
+    resumo_erro_beta,
+
+    digits = 6,
+
+    caption =
+      "Erro médio na recuperação dos betas verdadeiros"
+
+  )
+
+}
+```
+
+# 25. Recuperação dos \(\psi_g\)
+
+Como os dados foram gerados utilizando Queen, a comparação mais importante é:
+
+\[
+\psi_g^{true}
+\quad\text{vs}\quad
+\hat\psi_g^{Queen}.
+\]
+
+```{r psi-true}
+if (
+  file.exists(
+    "parametros_psi_true_v4.csv"
+  )
+) {
+
+
+  psi_true <- readr::read_csv(
+
+    "parametros_psi_true_v4.csv",
+
+    show_col_types =
+      FALSE
+
+  )
+
+
+  tabela_psi <- tibble::tibble(
+
+    id_celula =
+      grid_order,
+
+    psi_rook =
+      fit_rook$psi,
+
+    psi_queen =
+      fit_queen$psi
+
+  ) %>%
+
+    dplyr::left_join(
+
+      psi_true,
+
+      by =
+        "id_celula"
+
+    )
+
+
+  knitr::kable(
+
+    tabela_psi,
+
+    digits = 7,
+
+    caption =
+      "Psi verdadeiro versus estimado"
+
+  )
+
+}
+```
+
+# 26. Correlação entre \(\psi\) verdadeiro e estimado
+
+```{r psi-correlation}
+if (
+  exists(
+    "tabela_psi"
+  )
+) {
+
+
+  psi_diagnostico <- tibble::tibble(
+
+    Modelo =
+      c(
+        "SP-NB Rook",
+        "SP-NB Queen"
+      ),
+
+    Correlacao_com_Psi_true =
+      c(
+
+        cor(
+          tabela_psi$psi_true,
+          tabela_psi$psi_rook
+        ),
+
+        cor(
+          tabela_psi$psi_true,
+          tabela_psi$psi_queen
+        )
+
+      ),
+
+    MAE_Psi =
+      c(
+
+        mean(
+          abs(
+            tabela_psi$psi_true -
+              tabela_psi$psi_rook
+          )
+        ),
+
+        mean(
+          abs(
+            tabela_psi$psi_true -
+              tabela_psi$psi_queen
+          )
+        )
+
+      )
+
+  )
+
+
+  knitr::kable(
+
+    psi_diagnostico,
+
+    digits = 6,
+
+    caption =
+      "Capacidade de recuperação dos parâmetros espaciais"
+
+  )
+
+}
+```
+
+```{r psi-scatter}
+if (
+  exists(
+    "tabela_psi"
+  )
+) {
+
+
+  ggplot(
+
+    tabela_psi,
+
+    aes(
+
+      x =
+        psi_true,
+
+      y =
+        psi_queen,
+
+      label =
+        id_celula
+
+    )
+
+  ) +
+
+    geom_point(
+      size = 3
+    ) +
+
+    geom_text(
+      nudge_y = 0.00001,
+      size = 3
+    ) +
+
+    geom_abline(
+      intercept = 0,
+      slope = 1,
+      linetype = "dashed"
+    ) +
+
+    labs(
+
+      title =
+        "Recuperação dos efeitos espaciais — Queen",
+
+      x =
+        expression(
+          psi[g]^true
+        ),
+
+      y =
+        expression(
+          hat(psi)[g]
+        )
+
+    ) +
+
+    theme_minimal()
+
+}
+```
+
+# 27. Sinistros observados e previstos por grade
+
+```{r grid-predictions}
+# ============================================================
+# 27. GRADE
+# ============================================================
+
+pred_teste <- teste %>%
+
+  dplyr::mutate(
+
+    lambda_nb =
+      mu_nb_test,
+
+    lambda_rook =
+      mu_rook_test,
+
+    lambda_queen =
+      mu_queen_test
+
+  )
+
+
+por_grade <- pred_teste %>%
+
+  dplyr::group_by(
+
+    id_celula,
+    linha,
+    coluna
+
+  ) %>%
+
+  dplyr::summarise(
+
+    Observado =
+      sum(
+        sinistros
+      ),
+
+    NB =
+      sum(
+        lambda_nb
+      ),
+
+    SP_NB_Rook =
+      sum(
+        lambda_rook
+      ),
+
+    SP_NB_Queen =
+      sum(
+        lambda_queen
+      ),
+
+    .groups =
+      "drop"
+
+  )
+
+
+knitr::kable(
+
+  por_grade,
+
+  digits = 2,
+
+  caption =
+    "Sinistros observados e previstos por grade — teste"
+
+)
+```
+
+# 28. Observado versus previsto por grade
+
+```{r grid-bars}
+por_grade_long <- por_grade %>%
+
+  tidyr::pivot_longer(
+
+    cols =
+      c(
+        Observado,
+        NB,
+        SP_NB_Rook,
+        SP_NB_Queen
+      ),
+
+    names_to =
+      "Serie",
+
+    values_to =
+      "Sinistros"
+
+  )
+
+
+ggplot(
+
+  por_grade_long,
+
+  aes(
+
+    x =
+      id_celula,
+
+    y =
+      Sinistros,
+
+    fill =
+      Serie
+
+  )
+
+) +
+
+  geom_col(
+
+    position =
+      position_dodge(
+        width = 0.8
+      )
+
+  ) +
+
+  labs(
+
+    title =
+      "Observado versus previsto por grade",
+
+    subtitle =
+      "Período de teste",
+
+    x =
+      "Grid",
+
+    y =
+      "Sinistros",
+
+    fill =
+      NULL
+
+  ) +
+
+  theme_minimal() +
+
+  theme(
+
+    axis.text.x =
+      element_text(
+        angle = 45,
+        hjust = 1
+      )
+
+  )
+```
+
+# 29. RMSE no nível das grades
+
+```{r grid-metrics}
+metricas_grade <- tibble::tibble(
+
+  Modelo =
+    c(
+      "NB",
+      "SP-NB Rook",
+      "SP-NB Queen"
+    ),
+
+  RMSE_Grade =
+    c(
+
+      sqrt(
+        mean(
+          (
+            por_grade$Observado -
+              por_grade$NB
+          )^2
+        )
+      ),
+
+      sqrt(
+        mean(
+          (
+            por_grade$Observado -
+              por_grade$SP_NB_Rook
+          )^2
+        )
+      ),
+
+      sqrt(
+        mean(
+          (
+            por_grade$Observado -
+              por_grade$SP_NB_Queen
+          )^2
+        )
+      )
+
+    ),
+
+  Correlacao_Grade =
+    c(
+
+      cor(
+        por_grade$Observado,
+        por_grade$NB
+      ),
+
+      cor(
+        por_grade$Observado,
+        por_grade$SP_NB_Rook
+      ),
+
+      cor(
+        por_grade$Observado,
+        por_grade$SP_NB_Queen
+      )
+
+    )
+
+)
+
+
+knitr::kable(
+
+  metricas_grade,
+
+  digits = 4,
+
+  caption =
+    "Desempenho espacial no período de teste"
+
+)
+```
+
+# 30. Componente espacial previsto
+
+```{r decomposition}
+# ============================================================
+# 30. DECOMPOSICAO QUEEN
+# ============================================================
+
+taxa_base_queen <-
+
+  exp(
+
+    as.numeric(
+
+      X_test %*%
+        fit_queen$beta
+
+    )
+
+  )
+
+
+taxa_spatial_queen <-
+
+  fit_queen$psi[
+    grid_idx_test
+  ] *
+
+  S_queen_test
+
+
+share_spatial_estimado <-
+
+  taxa_spatial_queen /
+
+  (
+    taxa_base_queen +
+      taxa_spatial_queen
+  )
+
+
+resumo_share_estimado <- tibble::tibble(
+
+  Indicador =
+    c(
+
+      "Share espacial medio estimado",
+      "Share espacial mediano estimado",
+      "Share espacial medio true no teste"
+
+    ),
+
+  Valor =
+    c(
+
+      mean(
+        share_spatial_estimado[
+          S_queen_test > 0
+        ]
+      ),
+
+      median(
+        share_spatial_estimado[
+          S_queen_test > 0
+        ]
+      ),
+
+      mean(
+        teste$share_spatial_true[
+          teste$spatial_lag_queen_true >
+            0
+        ]
+      )
+
+    )
+
+)
+
+
+knitr::kable(
+
+  resumo_share_estimado,
+
+  digits = 4,
+
+  caption =
+    "Importância verdadeira e estimada do componente espacial"
+
+)
+```
+
+# 31. Resumo automático
+
+```{r automatic-summary}
+# ============================================================
+# 31. RESUMO AUTOMATICO
+# ============================================================
+
+melhor_rmse <-
+
+  metricas_teste %>%
+
+  dplyr::slice_min(
+    RMSE,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+
+  dplyr::pull(
+    Modelo
+  )
+
+
+melhor_logscore <-
+
+  metricas_teste %>%
+
+  dplyr::slice_max(
+    LogScore,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+
+  dplyr::pull(
+    Modelo
+  )
+
+
+melhor_grade <-
+
+  metricas_grade %>%
+
+  dplyr::slice_min(
+    RMSE_Grade,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+
+  dplyr::pull(
+    Modelo
+  )
+
+
+cat(
+  "Melhor RMSE fora da amostra:",
+  melhor_rmse,
+  "\n\n"
+)
+
+
+cat(
+  "Melhor log-score fora da amostra:",
+  melhor_logscore,
+  "\n\n"
+)
+
+
+cat(
+  "Melhor RMSE por grade:",
+  melhor_grade,
+  "\n\n"
+)
+
+
+if (
+  melhor_rmse ==
+    "SP-NB Queen"
+) {
+
+  cat(
+    "RESULTADO: O SP-NB Queen apresentou o menor RMSE fora da amostra.\n"
+  )
+
+} else {
+
+  cat(
+    "ATENCAO: O SP-NB Queen nao apresentou o menor RMSE fora da amostra.\n"
+  )
+
+}
+
+
+if (
+  melhor_grade ==
+    "SP-NB Queen"
+) {
+
+  cat(
+    "RESULTADO: Queen tambem foi o melhor modelo na distribuicao espacial por grade.\n"
+  )
+
+} else {
+
+  cat(
+    "ATENCAO: Queen nao foi o melhor modelo no nivel das grades.\n"
+  )
+
+}
+```
+
+# 32. Conclusão do experimento
+
+A comparação deve ser interpretada em conjunto.
+
+A evidência de que a estrutura espaço-temporal está funcionando é mais forte quando:
+
+1. o componente espacial verdadeiro possui participação material na frequência;
+2. o SP-NB melhora o desempenho fora da amostra em relação ao NB;
+3. Queen supera Rook, já que Queen gerou os dados;
+4. os \(\beta\) estimados ficam próximos dos parâmetros verdadeiros;
+5. os \(\psi_g\) estimados pelo Queen se correlacionam com os \(\psi_g\) verdadeiros;
+6. o padrão espacial observado de sinistros é reproduzido melhor pelo Queen.
+
+Não é necessário que Queen seja superior em **todas** as métricas, devido ao ruído da Negative Binomial. O ponto principal é verificar se existe uma melhora consistente e se o processo gerador espacial é recuperado.
+
+# 33. Exportar resultados
+
+```{r export}
+# ============================================================
+# 33. EXPORTACAO
+# ============================================================
+
+dir.create(
+
+  "resultados_v4",
+
+  showWarnings =
+    FALSE
+
+)
+
+
+readr::write_csv(
+
+  metricas_treino,
+
+  "resultados_v4/metricas_treino.csv"
+
+)
+
+
+readr::write_csv(
+
+  metricas_teste,
+
+  "resultados_v4/metricas_teste.csv"
+
+)
+
+
+readr::write_csv(
+
+  tabela_beta,
+
+  "resultados_v4/betas_estimados.csv"
+
+)
+
+
+readr::write_csv(
+
+  por_grade,
+
+  "resultados_v4/observado_previsto_por_grade.csv"
+
+)
+
+
+readr::write_csv(
+
+  metricas_grade,
+
+  "resultados_v4/metricas_por_grade.csv"
+
+)
+
+
+if (
+  exists(
+    "tabela_psi"
+  )
+) {
+
+  readr::write_csv(
+
+    tabela_psi,
+
+    "resultados_v4/psi_true_estimado.csv"
+
+  )
+
+}
+
+
+if (
+  exists(
+    "psi_diagnostico"
+  )
+) {
+
+  readr::write_csv(
+
+    psi_diagnostico,
+
+    "resultados_v4/diagnostico_psi.csv"
+
+  )
+
+}
+
+
+cat(
+  "Resultados salvos em:",
+  file.path(
+    getwd(),
+    "resultados_v4"
+  ),
+  "\n"
+)
+```
+
+# 34. Session info
+
+```{r session-info}
+sessionInfo()
+```

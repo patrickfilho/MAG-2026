@@ -1,0 +1,34 @@
+processing file: 14.-Resultados-com-%.Rmd
+  |.......                                          |  14% [spatial-share-hist]
+
+Error in `png()`:
+! 'filename' inválido
+Backtrace:
+     ▆
+  1. └─rmarkdown::render(...)
+  2.   └─knitr::knit(knit_input, knit_output, envir = envir, quiet = quiet)
+  3.     └─knitr:::process_file(text, output)
+  4.       ├─xfun:::handle_error(...)
+  5.       ├─base::withCallingHandlers(...)
+  6.       └─knitr:::process_group(group)
+  7.         └─knitr:::call_block(x)
+  8.           └─knitr:::block_exec(params)
+  9.             └─knitr:::eng_r(options)
+ 10.               ├─base::unlist(sew(res, options))
+ 11.               ├─knitr::sew(res, options)
+ 12.               └─knitr:::sew.list(res, options)
+ 13.                 └─base::lapply(x, sew, options, ...)
+ 14.                   ├─knitr (local) FUN(X[[i]], ...)
+ 15.                   └─knitr:::sew.recordedplot(X[[i]], ...)
+ 16.                     └─base::mapply(...)
+ 17.                       └─knitr (local) `<fn>`(...)
+ 18.                         ├─knitr:::in_base_dir(...)
+ 19.                         │ └─knitr:::in_dir(d, expr)
+ 20.                         └─knitr:::plot2dev(...)
+ 21.                           ├─base::do.call(...)
+ 22.                           └─knitr (local) `<fn>`(...)
+ 23.                             └─grDevices::png(..., res = dpi, units = "in")
+                                                                                                               
+
+Quitting from 14.-Resultados-com-%.Rmd:313-346 [spatial-share-hist]
+Execução interrompida

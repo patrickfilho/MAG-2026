@@ -1,0 +1,1757 @@
+---
+title: "Diagnóstico dos Modelos por Grade"
+subtitle: "Sinistros observados versus previstos — NB, SP-NB Rook e SP-NB Queen"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+date: "`r Sys.Date()`"
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+# ============================================================
+# 0. CONFIGURACOES
+# ============================================================
+
+options(
+  scipen = 999,
+  dplyr.summarise.inform = FALSE
+)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 11,
+  fig.height = 6
+)
+
+pacotes <- c(
+  "dplyr",
+  "tidyr",
+  "readr",
+  "ggplot2",
+  "knitr",
+  "scales"
+)
+
+instalar <- pacotes[
+  !pacotes %in% rownames(installed.packages())
+]
+
+if (length(instalar) > 0) {
+  install.packages(instalar)
+}
+
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(knitr)
+library(scales)
+```
+
+# 1. Objetivo
+
+Este relatório verifica se os três modelos reproduzem adequadamente a distribuição espacial dos sinistros no período de teste.
+
+Os modelos comparados são:
+
+1. **Negative Binomial tradicional (NB)**;
+2. **SP-NB com adjacência Rook**;
+3. **SP-NB com adjacência Queen**.
+
+A análise principal compara, para cada grade \(g\):
+
+\[
+Y_g^{obs}
+=
+\sum_t Y_{g,t}
+\]
+
+com:
+
+\[
+\hat Y_g
+=
+\sum_t \hat\lambda_{g,t}.
+\]
+
+Como \(\hat\lambda\) representa uma esperança, não se espera igualdade exata entre observado e previsto. O objetivo é verificar proximidade, ausência de viés sistemático e manutenção do padrão espacial.
+
+# 2. Ler as previsões do período de teste
+
+```{r leitura}
+# ============================================================
+# 2. LEITURA
+# ============================================================
+
+ARQUIVO_PREDICOES <-
+  "resultados_modelos_v3/predicoes_teste.csv"
+
+
+if (!file.exists(ARQUIVO_PREDICOES)) {
+
+  stop(
+    paste0(
+      "Arquivo nao encontrado: ",
+      ARQUIVO_PREDICOES,
+      "\nRode primeiro o R Markdown dos tres modelos."
+    )
+  )
+
+}
+
+
+pred <- readr::read_csv(
+  ARQUIVO_PREDICOES,
+  show_col_types = FALSE
+)
+
+
+cat(
+  "Numero de linhas:",
+  nrow(pred),
+  "\n"
+)
+
+cat(
+  "Numero de grades:",
+  dplyr::n_distinct(pred$id_celula),
+  "\n"
+)
+
+cat(
+  "Periodo:",
+  min(pred$ano),
+  "a",
+  max(pred$ano),
+  "\n"
+)
+
+cat(
+  "Sinistros observados:",
+  sum(pred$sinistros),
+  "\n"
+)
+```
+
+# 3. Validar colunas
+
+```{r validacao}
+# ============================================================
+# 3. VALIDACAO
+# ============================================================
+
+necessarias <- c(
+  "id_celula",
+  "linha",
+  "coluna",
+  "ano",
+  "mes",
+  "sinistros",
+  "lambda_nb",
+  "lambda_sp_rook",
+  "lambda_sp_queen"
+)
+
+faltantes <- setdiff(
+  necessarias,
+  names(pred)
+)
+
+if (length(faltantes) > 0) {
+
+  stop(
+    paste(
+      "Colunas ausentes:",
+      paste(
+        faltantes,
+        collapse = ", "
+      )
+    )
+  )
+
+}
+```
+
+# 4. Sinistros observados e previstos por grade
+
+```{r agregacao-grade}
+# ============================================================
+# 4. TOTAL POR GRADE
+# ============================================================
+
+por_grade <- pred %>%
+
+  dplyr::group_by(
+    id_celula,
+    linha,
+    coluna
+  ) %>%
+
+  dplyr::summarise(
+
+    observado =
+      sum(
+        sinistros
+      ),
+
+    previsto_nb =
+      sum(
+        lambda_nb
+      ),
+
+    previsto_rook =
+      sum(
+        lambda_sp_rook
+      ),
+
+    previsto_queen =
+      sum(
+        lambda_sp_queen
+      ),
+
+    .groups =
+      "drop"
+
+  ) %>%
+
+  dplyr::arrange(
+    linha,
+    coluna
+  )
+
+
+knitr::kable(
+  por_grade,
+  digits = 2,
+  caption = "Sinistros observados e previstos por grade"
+)
+```
+
+# 5. Erros por grade
+
+```{r erros-grade}
+# ============================================================
+# 5. ERROS
+# ============================================================
+
+por_grade <- por_grade %>%
+
+  dplyr::mutate(
+
+    # --------------------------------------------------------
+    # Erro simples: previsto - observado
+    # --------------------------------------------------------
+
+    erro_nb =
+      previsto_nb -
+      observado,
+
+    erro_rook =
+      previsto_rook -
+      observado,
+
+    erro_queen =
+      previsto_queen -
+      observado,
+
+
+    # --------------------------------------------------------
+    # Erro absoluto
+    # --------------------------------------------------------
+
+    abs_erro_nb =
+      abs(
+        erro_nb
+      ),
+
+    abs_erro_rook =
+      abs(
+        erro_rook
+      ),
+
+    abs_erro_queen =
+      abs(
+        erro_queen
+      ),
+
+
+    # --------------------------------------------------------
+    # Erro percentual
+    #
+    # NA quando observado = 0
+    # --------------------------------------------------------
+
+    erro_pct_nb =
+      if_else(
+        observado > 0,
+        100 *
+          erro_nb /
+          observado,
+        NA_real_
+      ),
+
+    erro_pct_rook =
+      if_else(
+        observado > 0,
+        100 *
+          erro_rook /
+          observado,
+        NA_real_
+      ),
+
+    erro_pct_queen =
+      if_else(
+        observado > 0,
+        100 *
+          erro_queen /
+          observado,
+        NA_real_
+      ),
+
+
+    # --------------------------------------------------------
+    # Ratio previsto / observado
+    #
+    # 1 = perfeito em total agregado
+    # --------------------------------------------------------
+
+    ratio_nb =
+      if_else(
+        observado > 0,
+        previsto_nb /
+          observado,
+        NA_real_
+      ),
+
+    ratio_rook =
+      if_else(
+        observado > 0,
+        previsto_rook /
+          observado,
+        NA_real_
+      ),
+
+    ratio_queen =
+      if_else(
+        observado > 0,
+        previsto_queen /
+          observado,
+        NA_real_
+      )
+
+  )
+```
+
+```{r tabela-erros}
+tabela_erros <- por_grade %>%
+
+  dplyr::select(
+
+    id_celula,
+
+    observado,
+
+    previsto_nb,
+    abs_erro_nb,
+    erro_pct_nb,
+
+    previsto_rook,
+    abs_erro_rook,
+    erro_pct_rook,
+
+    previsto_queen,
+    abs_erro_queen,
+    erro_pct_queen
+
+  )
+
+
+knitr::kable(
+
+  tabela_erros,
+
+  digits = 2,
+
+  caption =
+    "Erro dos modelos em cada grade"
+
+)
+```
+
+# 6. Visualização — observado versus previsto por grade
+
+```{r barras-grade}
+# ============================================================
+# 6. GRAFICO POR GRADE
+# ============================================================
+
+graf_grade <- por_grade %>%
+
+  dplyr::select(
+
+    id_celula,
+    observado,
+
+    previsto_nb,
+    previsto_rook,
+    previsto_queen
+
+  ) %>%
+
+  tidyr::pivot_longer(
+
+    cols =
+      c(
+        observado,
+        previsto_nb,
+        previsto_rook,
+        previsto_queen
+      ),
+
+    names_to =
+      "serie",
+
+    values_to =
+      "sinistros"
+
+  ) %>%
+
+  dplyr::mutate(
+
+    serie =
+      dplyr::recode(
+
+        serie,
+
+        observado =
+          "Observado",
+
+        previsto_nb =
+          "NB",
+
+        previsto_rook =
+          "SP-NB Rook",
+
+        previsto_queen =
+          "SP-NB Queen"
+
+      )
+
+  )
+
+
+ggplot(
+
+  graf_grade,
+
+  aes(
+
+    x =
+      id_celula,
+
+    y =
+      sinistros,
+
+    fill =
+      serie
+
+  )
+
+) +
+
+  geom_col(
+
+    position =
+      position_dodge(
+        width = 0.8
+      ),
+
+    width =
+      0.7
+
+  ) +
+
+  labs(
+
+    title =
+      "Sinistros observados e previstos por grade",
+
+    subtitle =
+      "Período de teste",
+
+    x =
+      "Grade",
+
+    y =
+      "Número de sinistros",
+
+    fill =
+      NULL
+
+  ) +
+
+  theme_minimal() +
+
+  theme(
+
+    axis.text.x =
+      element_text(
+        angle = 45,
+        hjust = 1
+      )
+
+  )
+```
+
+# 7. Observado versus previsto — NB
+
+```{r scatter-nb}
+# ============================================================
+# 7. SCATTER NB
+# ============================================================
+
+lim_max <-
+  max(
+    c(
+      por_grade$observado,
+      por_grade$previsto_nb,
+      por_grade$previsto_rook,
+      por_grade$previsto_queen
+    ),
+    na.rm = TRUE
+  )
+
+
+ggplot(
+
+  por_grade,
+
+  aes(
+
+    x =
+      observado,
+
+    y =
+      previsto_nb,
+
+    label =
+      id_celula
+
+  )
+
+) +
+
+  geom_point(
+    size = 3
+  ) +
+
+  geom_text(
+    nudge_y = 0.3,
+    size = 3
+  ) +
+
+  geom_abline(
+
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed"
+
+  ) +
+
+  coord_equal(
+
+    xlim =
+      c(
+        0,
+        lim_max
+      ),
+
+    ylim =
+      c(
+        0,
+        lim_max
+      )
+
+  ) +
+
+  labs(
+
+    title =
+      "NB — observado versus previsto por grade",
+
+    x =
+      "Sinistros observados",
+
+    y =
+      "Sinistros previstos"
+
+  ) +
+
+  theme_minimal()
+```
+
+# 8. Observado versus previsto — SP-NB Rook
+
+```{r scatter-rook}
+ggplot(
+
+  por_grade,
+
+  aes(
+
+    x =
+      observado,
+
+    y =
+      previsto_rook,
+
+    label =
+      id_celula
+
+  )
+
+) +
+
+  geom_point(
+    size = 3
+  ) +
+
+  geom_text(
+    nudge_y = 0.3,
+    size = 3
+  ) +
+
+  geom_abline(
+
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed"
+
+  ) +
+
+  coord_equal(
+
+    xlim =
+      c(
+        0,
+        lim_max
+      ),
+
+    ylim =
+      c(
+        0,
+        lim_max
+      )
+
+  ) +
+
+  labs(
+
+    title =
+      "SP-NB Rook — observado versus previsto por grade",
+
+    x =
+      "Sinistros observados",
+
+    y =
+      "Sinistros previstos"
+
+  ) +
+
+  theme_minimal()
+```
+
+# 9. Observado versus previsto — SP-NB Queen
+
+```{r scatter-queen}
+ggplot(
+
+  por_grade,
+
+  aes(
+
+    x =
+      observado,
+
+    y =
+      previsto_queen,
+
+    label =
+      id_celula
+
+  )
+
+) +
+
+  geom_point(
+    size = 3
+  ) +
+
+  geom_text(
+    nudge_y = 0.3,
+    size = 3
+  ) +
+
+  geom_abline(
+
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed"
+
+  ) +
+
+  coord_equal(
+
+    xlim =
+      c(
+        0,
+        lim_max
+      ),
+
+    ylim =
+      c(
+        0,
+        lim_max
+      )
+
+  ) +
+
+  labs(
+
+    title =
+      "SP-NB Queen — observado versus previsto por grade",
+
+    x =
+      "Sinistros observados",
+
+    y =
+      "Sinistros previstos"
+
+  ) +
+
+  theme_minimal()
+```
+
+# 10. Métricas agregadas no nível da grade
+
+Agora avaliamos os 25 totais espaciais, e não cada linha risk-group-mês.
+
+```{r metricas-grade}
+# ============================================================
+# 10. METRICAS NO NIVEL DA GRADE
+# ============================================================
+
+metricas_grade_modelo <- function(
+    observado,
+    previsto,
+    nome
+) {
+
+  tibble::tibble(
+
+    Modelo =
+      nome,
+
+    MAE_grade =
+      mean(
+        abs(
+          observado -
+            previsto
+        )
+      ),
+
+    RMSE_grade =
+      sqrt(
+
+        mean(
+
+          (
+            observado -
+              previsto
+          )^2
+
+        )
+
+      ),
+
+    Bias_grade =
+      mean(
+        previsto -
+          observado
+      ),
+
+    Balance_total =
+      sum(previsto) /
+      sum(observado),
+
+    Correlacao =
+      cor(
+        observado,
+        previsto
+      ),
+
+    MAPE_grade =
+      mean(
+
+        abs(
+
+          (
+            previsto[
+              observado > 0
+            ] -
+              observado[
+                observado > 0
+              ]
+          ) /
+
+            observado[
+              observado > 0
+            ]
+
+        ),
+
+        na.rm = TRUE
+
+      ) *
+      100
+
+  )
+
+}
+
+
+metricas_grade <- dplyr::bind_rows(
+
+  metricas_grade_modelo(
+
+    por_grade$observado,
+    por_grade$previsto_nb,
+    "NB"
+
+  ),
+
+  metricas_grade_modelo(
+
+    por_grade$observado,
+    por_grade$previsto_rook,
+    "SP-NB Rook"
+
+  ),
+
+  metricas_grade_modelo(
+
+    por_grade$observado,
+    por_grade$previsto_queen,
+    "SP-NB Queen"
+
+  )
+
+)
+
+
+knitr::kable(
+
+  metricas_grade,
+
+  digits = 4,
+
+  caption =
+    "Desempenho agregado no nível das 25 grades"
+
+)
+```
+
+# 11. Quais grades têm maior erro?
+
+```{r ranking-erros}
+# ============================================================
+# 11. RANKING
+# ============================================================
+
+ranking_erros <- por_grade %>%
+
+  dplyr::select(
+
+    id_celula,
+    observado,
+
+    abs_erro_nb,
+    abs_erro_rook,
+    abs_erro_queen
+
+  ) %>%
+
+  tidyr::pivot_longer(
+
+    cols =
+      starts_with(
+        "abs_erro"
+      ),
+
+    names_to =
+      "modelo",
+
+    values_to =
+      "erro_absoluto"
+
+  ) %>%
+
+  dplyr::mutate(
+
+    modelo =
+      dplyr::recode(
+
+        modelo,
+
+        abs_erro_nb =
+          "NB",
+
+        abs_erro_rook =
+          "SP-NB Rook",
+
+        abs_erro_queen =
+          "SP-NB Queen"
+
+      )
+
+  ) %>%
+
+  dplyr::arrange(
+    dplyr::desc(
+      erro_absoluto
+    )
+  )
+
+
+knitr::kable(
+
+  head(
+    ranking_erros,
+    20
+  ),
+
+  digits = 2,
+
+  caption =
+    "20 maiores erros absolutos no nível da grade"
+
+)
+```
+
+# 12. Mapa 5x5 — sinistros observados
+
+```{r heatmap-observado}
+# ============================================================
+# 12. MAPA OBSERVADO
+# ============================================================
+
+ggplot(
+
+  por_grade,
+
+  aes(
+
+    x =
+      coluna,
+
+    y =
+      linha,
+
+    fill =
+      observado
+
+  )
+
+) +
+
+  geom_tile(
+    color = "white"
+  ) +
+
+  geom_text(
+
+    aes(
+      label =
+        round(
+          observado,
+          0
+        )
+    ),
+
+    size = 4
+
+  ) +
+
+  coord_equal() +
+
+  scale_y_reverse() +
+
+  labs(
+
+    title =
+      "Sinistros observados por grade",
+
+    x =
+      "Coluna",
+
+    y =
+      "Linha",
+
+    fill =
+      "Sinistros"
+
+  ) +
+
+  theme_minimal()
+```
+
+# 13. Mapa 5x5 — NB
+
+```{r heatmap-nb}
+ggplot(
+
+  por_grade,
+
+  aes(
+
+    x =
+      coluna,
+
+    y =
+      linha,
+
+    fill =
+      previsto_nb
+
+  )
+
+) +
+
+  geom_tile(
+    color = "white"
+  ) +
+
+  geom_text(
+
+    aes(
+      label =
+        round(
+          previsto_nb,
+          1
+        )
+    ),
+
+    size = 4
+
+  ) +
+
+  coord_equal() +
+
+  scale_y_reverse() +
+
+  labs(
+
+    title =
+      "Sinistros previstos por grade — NB",
+
+    x =
+      "Coluna",
+
+    y =
+      "Linha",
+
+    fill =
+      "Previsto"
+
+  ) +
+
+  theme_minimal()
+```
+
+# 14. Mapa 5x5 — SP-NB Rook
+
+```{r heatmap-rook}
+ggplot(
+
+  por_grade,
+
+  aes(
+
+    x =
+      coluna,
+
+    y =
+      linha,
+
+    fill =
+      previsto_rook
+
+  )
+
+) +
+
+  geom_tile(
+    color = "white"
+  ) +
+
+  geom_text(
+
+    aes(
+      label =
+        round(
+          previsto_rook,
+          1
+        )
+    ),
+
+    size = 4
+
+  ) +
+
+  coord_equal() +
+
+  scale_y_reverse() +
+
+  labs(
+
+    title =
+      "Sinistros previstos por grade — SP-NB Rook",
+
+    x =
+      "Coluna",
+
+    y =
+      "Linha",
+
+    fill =
+      "Previsto"
+
+  ) +
+
+  theme_minimal()
+```
+
+# 15. Mapa 5x5 — SP-NB Queen
+
+```{r heatmap-queen}
+ggplot(
+
+  por_grade,
+
+  aes(
+
+    x =
+      coluna,
+
+    y =
+      linha,
+
+    fill =
+      previsto_queen
+
+  )
+
+) +
+
+  geom_tile(
+    color = "white"
+  ) +
+
+  geom_text(
+
+    aes(
+      label =
+        round(
+          previsto_queen,
+          1
+        )
+    ),
+
+    size = 4
+
+  ) +
+
+  coord_equal() +
+
+  scale_y_reverse() +
+
+  labs(
+
+    title =
+      "Sinistros previstos por grade — SP-NB Queen",
+
+    x =
+      "Coluna",
+
+    y =
+      "Linha",
+
+    fill =
+      "Previsto"
+
+  ) +
+
+  theme_minimal()
+```
+
+# 16. Diagnóstico mais rigoroso — grade e ano
+
+Um modelo pode acertar o total de uma grade em cinco anos e ainda errar a dinâmica temporal.
+
+Por isso, também avaliamos:
+
+\[
+Y_{g,a}
+\]
+
+por grade e ano.
+
+```{r grade-ano}
+# ============================================================
+# 16. GRADE x ANO
+# ============================================================
+
+grade_ano <- pred %>%
+
+  dplyr::group_by(
+    id_celula,
+    ano
+  ) %>%
+
+  dplyr::summarise(
+
+    observado =
+      sum(
+        sinistros
+      ),
+
+    NB =
+      sum(
+        lambda_nb
+      ),
+
+    SP_NB_Rook =
+      sum(
+        lambda_sp_rook
+      ),
+
+    SP_NB_Queen =
+      sum(
+        lambda_sp_queen
+      ),
+
+    .groups =
+      "drop"
+
+  )
+
+
+knitr::kable(
+
+  grade_ano,
+
+  digits = 2,
+
+  caption =
+    "Sinistros observados e previstos por grade e ano"
+
+)
+```
+
+# 17. Erro por grade e ano
+
+```{r metricas-grade-ano}
+metricas_grade_ano <- dplyr::bind_rows(
+
+  tibble::tibble(
+
+    Modelo =
+      "NB",
+
+    MAE =
+      mean(
+        abs(
+          grade_ano$observado -
+            grade_ano$NB
+        )
+      ),
+
+    RMSE =
+      sqrt(
+        mean(
+          (
+            grade_ano$observado -
+              grade_ano$NB
+          )^2
+        )
+      ),
+
+    Correlacao =
+      cor(
+        grade_ano$observado,
+        grade_ano$NB
+      )
+
+  ),
+
+  tibble::tibble(
+
+    Modelo =
+      "SP-NB Rook",
+
+    MAE =
+      mean(
+        abs(
+          grade_ano$observado -
+            grade_ano$SP_NB_Rook
+        )
+      ),
+
+    RMSE =
+      sqrt(
+        mean(
+          (
+            grade_ano$observado -
+              grade_ano$SP_NB_Rook
+          )^2
+        )
+      ),
+
+    Correlacao =
+      cor(
+        grade_ano$observado,
+        grade_ano$SP_NB_Rook
+      )
+
+  ),
+
+  tibble::tibble(
+
+    Modelo =
+      "SP-NB Queen",
+
+    MAE =
+      mean(
+        abs(
+          grade_ano$observado -
+            grade_ano$SP_NB_Queen
+        )
+      ),
+
+    RMSE =
+      sqrt(
+        mean(
+          (
+            grade_ano$observado -
+              grade_ano$SP_NB_Queen
+          )^2
+        )
+      ),
+
+    Correlacao =
+      cor(
+        grade_ano$observado,
+        grade_ano$SP_NB_Queen
+      )
+
+  )
+
+)
+
+
+knitr::kable(
+
+  metricas_grade_ano,
+
+  digits = 4,
+
+  caption =
+    "Desempenho no nível grade-ano"
+
+)
+```
+
+# 18. Séries anuais por grade
+
+```{r series-grade, fig.height=10}
+# ============================================================
+# 18. SERIES POR GRADE
+# ============================================================
+
+grade_ano_long <- grade_ano %>%
+
+  tidyr::pivot_longer(
+
+    cols =
+      c(
+        observado,
+        NB,
+        SP_NB_Rook,
+        SP_NB_Queen
+      ),
+
+    names_to =
+      "Serie",
+
+    values_to =
+      "Sinistros"
+
+  )
+
+
+ggplot(
+
+  grade_ano_long,
+
+  aes(
+
+    x =
+      ano,
+
+    y =
+      Sinistros,
+
+    linetype =
+      Serie
+
+  )
+
+) +
+
+  geom_line(
+    linewidth = 0.5
+  ) +
+
+  geom_point(
+    size = 1
+  ) +
+
+  facet_wrap(
+
+    ~ id_celula,
+
+    scales =
+      "free_y"
+
+  ) +
+
+  labs(
+
+    title =
+      "Observado versus previsto por grade e ano",
+
+    x =
+      "Ano",
+
+    y =
+      "Sinistros",
+
+    linetype =
+      NULL
+
+  ) +
+
+  theme_minimal() +
+
+  theme(
+    legend.position =
+      "bottom"
+  )
+```
+
+# 19. Critério simples de proximidade por grade
+
+Como diagnóstico visual, classificamos uma grade como próxima quando o erro absoluto percentual é de até 20%.
+
+Esse limite é apenas uma referência descritiva, não um teste estatístico formal.
+
+```{r classificacao}
+# ============================================================
+# 19. PROXIMIDADE
+# ============================================================
+
+classificacao <- por_grade %>%
+
+  dplyr::transmute(
+
+    id_celula,
+
+    observado,
+
+    NB =
+      if_else(
+
+        observado > 0,
+
+        abs(
+          previsto_nb -
+            observado
+        ) /
+          observado <=
+          0.20,
+
+        NA
+
+      ),
+
+    SP_NB_Rook =
+      if_else(
+
+        observado > 0,
+
+        abs(
+          previsto_rook -
+            observado
+        ) /
+          observado <=
+          0.20,
+
+        NA
+
+      ),
+
+    SP_NB_Queen =
+      if_else(
+
+        observado > 0,
+
+        abs(
+          previsto_queen -
+            observado
+        ) /
+          observado <=
+          0.20,
+
+        NA
+
+      )
+
+  )
+
+
+knitr::kable(
+
+  classificacao,
+
+  caption =
+    "Grades com previsão dentro de ±20% do observado"
+
+)
+```
+
+```{r taxa-acerto}
+taxa_acerto <- tibble::tibble(
+
+  Modelo =
+    c(
+      "NB",
+      "SP-NB Rook",
+      "SP-NB Queen"
+    ),
+
+  Percentual_grades_dentro_20pct =
+    c(
+
+      mean(
+        classificacao$NB,
+        na.rm = TRUE
+      ),
+
+      mean(
+        classificacao$SP_NB_Rook,
+        na.rm = TRUE
+      ),
+
+      mean(
+        classificacao$SP_NB_Queen,
+        na.rm = TRUE
+      )
+
+    ) *
+      100
+
+)
+
+
+knitr::kable(
+
+  taxa_acerto,
+
+  digits = 1,
+
+  caption =
+    "Percentual de grades com erro de até ±20%"
+
+)
+```
+
+# 20. Resumo para diagnóstico
+
+```{r resumo}
+# ============================================================
+# 20. RESUMO
+# ============================================================
+
+melhor_grade_rmse <- metricas_grade %>%
+
+  dplyr::slice_min(
+    RMSE_grade,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+
+  dplyr::pull(
+    Modelo
+  )
+
+
+melhor_grade_cor <- metricas_grade %>%
+
+  dplyr::slice_max(
+    Correlacao,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+
+  dplyr::pull(
+    Modelo
+  )
+
+
+melhor_grade_ano <- metricas_grade_ano %>%
+
+  dplyr::slice_min(
+    RMSE,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+
+  dplyr::pull(
+    Modelo
+  )
+
+
+resumo <- tibble::tibble(
+
+  Indicador =
+    c(
+      "Menor RMSE por grade",
+      "Maior correlação espacial",
+      "Menor RMSE grade-ano"
+    ),
+
+  Modelo =
+    c(
+      melhor_grade_rmse,
+      melhor_grade_cor,
+      melhor_grade_ano
+    )
+
+)
+
+
+knitr::kable(
+  resumo,
+  caption = "Resumo do diagnóstico espacial"
+)
+```
+
+# 21. Como interpretar
+
+O primeiro diagnóstico é verificar se os modelos reproduzem aproximadamente os totais observados de sinistros nas 25 grades.
+
+Entretanto, **acertar os totais agregados por grade não é suficiente para provar que o modelo está correto**.
+
+Um modelo pode, por exemplo:
+
+- superestimar uma grade em 2021;
+- subestimar a mesma grade em 2024;
+- terminar os cinco anos com o total correto por compensação.
+
+Por isso, este relatório também compara observado e previsto em nível **grade-ano**.
+
+Como regra de diagnóstico:
+
+- valores previstos sistematicamente acima ou abaixo do observado em determinadas grades indicam problema de calibração espacial;
+- boa proximidade no agregado, mas erro elevado por grade-ano, indica que o padrão espacial está sendo capturado, mas a dinâmica temporal não;
+- se NB, Rook e Queen apresentarem praticamente os mesmos resultados, o componente espacial pode estar acrescentando pouca informação;
+- se Queen tiver desempenho superior ao Rook, isso é coerente com o fato de a base V3 ter sido simulada originalmente com vizinhança Queen.
+
+# 22. Exportar tabelas de diagnóstico
+
+```{r exportacao}
+# ============================================================
+# 22. EXPORTAR
+# ============================================================
+
+dir.create(
+  "diagnostico_grade",
+  showWarnings = FALSE
+)
+
+
+readr::write_csv(
+
+  por_grade,
+
+  "diagnostico_grade/observado_previsto_por_grade.csv"
+
+)
+
+
+readr::write_csv(
+
+  metricas_grade,
+
+  "diagnostico_grade/metricas_por_grade.csv"
+
+)
+
+
+readr::write_csv(
+
+  grade_ano,
+
+  "diagnostico_grade/observado_previsto_grade_ano.csv"
+
+)
+
+
+readr::write_csv(
+
+  metricas_grade_ano,
+
+  "diagnostico_grade/metricas_grade_ano.csv"
+
+)
+
+
+readr::write_csv(
+
+  ranking_erros,
+
+  "diagnostico_grade/ranking_erros_grade.csv"
+
+)
+
+
+cat(
+  "\nArquivos salvos em:\n",
+  file.path(
+    getwd(),
+    "diagnostico_grade"
+  ),
+  "\n"
+)
+```
+
+# 23. Informações da sessão
+
+```{r session-info}
+sessionInfo()
+```
